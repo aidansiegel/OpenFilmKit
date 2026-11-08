@@ -4,6 +4,7 @@ Exit status: 0 ok, 1 error, 2 no scanner found, 3 scanner found but not
 safely identified, 130 interrupted.
 """
 import argparse
+import errno
 import json
 import os
 import shutil
@@ -424,14 +425,20 @@ COMMANDS = {'doctor': cmd_doctor, 'scanners': cmd_scanners, 'options': cmd_optio
             'convert': cmd_convert, 'clean': cmd_clean}
 
 
+def _pipe_error(e):
+    """A write to a reader that has gone: BrokenPipeError, which Windows reports as EINVAL."""
+    return isinstance(e, BrokenPipeError) or (sys.platform == 'win32' and e.errno == errno.EINVAL)
+
+
 def _stdout_closed():
     """True when stdout's reader has gone; then point stdout at /dev/null so the
     interpreter's final flush doesn't raise the same error again."""
     try:
         sys.stdout.flush()
         return False
-    except BrokenPipeError:
-        pass
+    except OSError as e:
+        if not _pipe_error(e):
+            return False
     try:
         devnull = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull, sys.stdout.fileno())
@@ -454,14 +461,10 @@ def main(argv=None):
         out.error(f'openfilmkit: {e}')
         out.result({'error': str(e), 'detail': e.detail})
         return e.code
-    except BrokenPipeError as e:
-        if not _stdout_closed():
-            out.error(f'openfilmkit: {e}')
-            out.result({'error': str(e)})
-            return 1
-        # The reader went away (`openfilmkit scanners | head`): stop quietly, like a SIGPIPE.
-        return 141
     except (RuntimeMissing, roll.RollError, capture.CaptureError, OSError) as e:
+        if isinstance(e, OSError) and _pipe_error(e) and _stdout_closed():
+            # The reader went away (`openfilmkit scanners | head`): stop quietly, like a SIGPIPE.
+            return 141
         out.error(f'openfilmkit: {e}')
         out.result({'error': str(e)})
         return 1
