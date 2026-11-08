@@ -4,25 +4,40 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openfilmkit"
-version = "0.0.1"
-description = "Free film scanning and negative conversion from the command line (placeholder; early development)"
+dynamic = ["version"]
+description = "Free film scanning and negative conversion from the command line, built on SANE"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "Aidan Siegel", email = "openfilmkit@aidansiegel.com" }]
 keywords = ["film", "scanner", "sane", "negative", "digitization"]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 2 - Pre-Alpha",
     "Environment :: Console",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Graphics :: Capture :: Scanners",
 ]
+# Capture needs only the standard library plus OpenFilmKit's SANE runtime (built by
+# tools/build_sane.py); conversion needs numpy and Pillow; clean also needs OpenCV.
+dependencies = ["numpy>=1.24", "pillow>=10"]
+
+[project.optional-dependencies]
+clean = ["opencv-python-headless>=4.8"]
 
 [project.urls]
 Homepage = "https://github.com/aidansiegel/OpenFilmKit"
 
 [project.scripts]
-openfilmkit = "openfilmkit:main"
+openfilmkit = "openfilmkit.cli:run"
+
+[tool.setuptools.dynamic]
+version = { attr = "openfilmkit.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["openfilmkit*"]
+
+[tool.setuptools.package-data]
+openfilmkit = ["data/*.json", "data/profiles/*.json.gz", "scanners/*/*.json"]

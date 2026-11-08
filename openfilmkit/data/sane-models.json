@@ -1,0 +1,649 @@
+{
+ "format": 1,
+ "sane_commit": "8ebb7c50e3ea4820cd8f62eccc4516e326ddbbb3",
+ "sources": {
+  "backend/genesys/tables_model.cpp": "2c2ced88a0b19258f6372a9990ea9faf8c59626c433d8cb9034e362fe4e50bc8"
+ },
+ "backends": {
+  "genesys": [
+   {
+    "id": "umax-astra-4500",
+    "vendor": "UMAX",
+    "model": "Astra 4500",
+    "usb": {
+     "vendor": "0638",
+     "product": "0a10",
+     "bcd": null
+    },
+    "line": 124
+   },
+   {
+    "id": "canon-lide-50",
+    "vendor": "Canon",
+    "model": "LiDE 35/40/50",
+    "usb": {
+     "vendor": "04a9",
+     "product": "2213",
+     "bcd": null
+    },
+    "line": 181
+   },
+   {
+    "id": "panasonic-kv-ss080",
+    "vendor": "Panasonic",
+    "model": "KV-SS080",
+    "usb": {
+     "vendor": "04da",
+     "product": "100f",
+     "bcd": null
+    },
+    "line": 231
+   },
+   {
+    "id": "hewlett-packard-scanjet-4850c",
+    "vendor": "Hewlett Packard",
+    "model": "ScanJet 4850C",
+    "usb": {
+     "vendor": "03f0",
+     "product": "1b05",
+     "bcd": null
+    },
+    "line": 282
+   },
+   {
+    "id": "hewlett-packard-scanjet-g4010",
+    "vendor": "Hewlett Packard",
+    "model": "ScanJet G4010",
+    "usb": {
+     "vendor": "03f0",
+     "product": "4505",
+     "bcd": null
+    },
+    "line": 333
+   },
+   {
+    "id": "hewlett-packard-scanjet-g4050",
+    "vendor": "Hewlett Packard",
+    "model": "ScanJet G4050",
+    "usb": {
+     "vendor": "03f0",
+     "product": "4605",
+     "bcd": null
+    },
+    "line": 385
+   },
+   {
+    "id": "canon-canoscan-4400f",
+    "vendor": "Canon",
+    "model": "Canoscan 4400f",
+    "usb": {
+     "vendor": "04a9",
+     "product": "2228",
+     "bcd": null
+    },
+    "line": 455
+   },
+   {
+    "id": "canon-canoscan-8400f",
+    "vendor": "Canon",
+    "model": "Canoscan 8400f",
+    "usb": {
+     "vendor": "04a9",
+     "product": "221e",
+     "bcd": null
+    },
+    "line": 525
+   },
+   {
+    "id": "canon-canoscan-8600f",
+    "vendor": "Canon",
+    "model": "Canoscan 8600f",
+    "usb": {
+     "vendor": "04a9",
+     "product": "2229",
+     "bcd": null
+    },
+    "line": 591
+   },
+   {
+    "id": "canon-lide-100",
+    "vendor": "Canon",
+    "model": "LiDE 100",
+    "usb": {
+     "vendor": "04a9",
+     "product": "1904",
+     "bcd": null
+    },
+    "line": 647
+   },
+   {
+    "id": "canon-lide-110",
+    "vendor": "Canon",
+    "model": "LiDE 110",
+    "usb": {
+     "vendor": "04a9",
+     "product": "1909",
+     "bcd": null
+    },
+    "line": 701
+   },
+   {
+    "id": "canon-lide-120",
+    "vendor": "Canon",
+    "model": "LiDE 120",
+    "usb": {
+     "vendor": "04a9",
+     "product": "190e",
+     "bcd": null
+    },
+    "line": 754
+   },
+   {
+    "id": "canon-lide-210",
+    "vendor": "Canon",
+    "model": "LiDE 210",
+    "usb": {
+     "vendor": "04a9",
+     "product": "190a",
+     "bcd": null
+    },
+    "line": 810
+   },
+   {
+    "id": "canon-lide-220",
+    "vendor": "Canon",
+    "model": "LiDE 220",
+    "usb": {
+     "vendor": "04a9",
+     "product": "190f",
+     "bcd": null
+    },
+    "line": 865
+   },
+   {
+    "id": "canon-canoscan-5600f",
+    "vendor": "Canon",
+    "model": "CanoScan 5600F",
+    "usb": {
+     "vendor": "04a9",
+     "product": "1906",
+     "bcd": null
+    },
+    "line": 939
+   },
+   {
+    "id": "canon-lide-700f",
+    "vendor": "Canon",
+    "model": "LiDE 700F",
+    "usb": {
+     "vendor": "04a9",
+     "product": "1907",
+     "bcd": null
+    },
+    "line": 996
+   },
+   {
+    "id": "canon-lide-200",
+    "vendor": "Canon",
+    "model": "LiDE 200",
+    "usb": {
+     "vendor": "04a9",
+     "product": "1905",
+     "bcd": null
+    },
+    "line": 1051
+   },
+   {
+    "id": "canon-lide-60",
+    "vendor": "Canon",
+    "model": "LiDE 60",
+    "usb": {
+     "vendor": "04a9",
+     "product": "221c",
+     "bcd": null
+    },
+    "line": 1107
+   },
+   {
+    "id": "canon-lide-80",
+    "vendor": "Canon",
+    "model": "LiDE 80",
+    "usb": {
+     "vendor": "04a9",
+     "product": "2214",
+     "bcd": null
+    },
+    "line": 1163
+   },
+   {
+    "id": "canon-lide-500f",
+    "vendor": "Canon",
+    "model": "LiDE 500F",
+    "usb": {
+     "vendor": "04a9",
+     "product": "221f",
+     "bcd": null
+    },
+    "line": 1224
+   },
+   {
+    "id": "canon-lide-90",
+    "vendor": "Canon",
+    "model": "LiDE 90",
+    "usb": {
+     "vendor": "04a9",
+     "product": "1900",
+     "bcd": null
+    },
+    "line": 1283
+   },
+   {
+    "id": "hewlett-packard-scanjet-2300c",
+    "vendor": "Hewlett Packard",
+    "model": "ScanJet 2300c",
+    "usb": {
+     "vendor": "03f0",
+     "product": "0901",
+     "bcd": null
+    },
+    "line": 1334
+   },
+   {
+    "id": "hewlett-packard-scanjet-2400c",
+    "vendor": "Hewlett Packard",
+    "model": "ScanJet 2400c",
+    "usb": {
+     "vendor": "03f0",
+     "product": "0a01",
+     "bcd": null
+    },
+    "line": 1386
+   },
+   {
+    "id": "visioneer-strobe-xp200",
+    "vendor": "Visioneer",
+    "model": "Strobe XP200",
+    "usb": {
+     "vendor": "04a7",
+     "product": "0426",
+     "bcd": null
+    },
+    "line": 1438
+   },
+   {
+    "id": "hewlett-packard-scanjet-3670",
+    "vendor": "Hewlett Packard",
+    "model": "ScanJet 3670",
+    "usb": {
+     "vendor": "03f0",
+     "product": "1405",
+     "bcd": null
+    },
+    "line": 1491
+   },
+   {
+    "id": "plustek-opticpro-st12",
+    "vendor": "Plustek",
+    "model": "OpticPro ST12",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0600",
+     "bcd": null
+    },
+    "line": 1541
+   },
+   {
+    "id": "plustek-opticpro-st24",
+    "vendor": "Plustek",
+    "model": "OpticPro ST24",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0601",
+     "bcd": null
+    },
+    "line": 1592
+   },
+   {
+    "id": "medion-md5345-model",
+    "vendor": "Medion",
+    "model": "MD5345/MD6228/MD6471",
+    "usb": {
+     "vendor": "0461",
+     "product": "0377",
+     "bcd": null
+    },
+    "line": 1647
+   },
+   {
+    "id": "visioneer-strobe-xp300",
+    "vendor": "Visioneer",
+    "model": "Strobe XP300",
+    "usb": {
+     "vendor": "04a7",
+     "product": "0474",
+     "bcd": null
+    },
+    "line": 1697
+   },
+   {
+    "id": "syscan-docketport-665",
+    "vendor": "Syscan/Ambir",
+    "model": "DocketPORT 665",
+    "usb": {
+     "vendor": "0a82",
+     "product": "4803",
+     "bcd": null
+    },
+    "line": 1747
+   },
+   {
+    "id": "visioneer-roadwarrior",
+    "vendor": "Visioneer",
+    "model": "Readwarrior",
+    "usb": {
+     "vendor": "04a7",
+     "product": "0494",
+     "bcd": null
+    },
+    "line": 1797
+   },
+   {
+    "id": "syscan-docketport-465",
+    "vendor": "Syscan",
+    "model": "DocketPORT 465",
+    "usb": {
+     "vendor": "0a82",
+     "product": "4802",
+     "bcd": null
+    },
+    "line": 1850
+   },
+   {
+    "id": "visioneer-xp100-revision3",
+    "vendor": "Visioneer",
+    "model": "XP100 Revision 3",
+    "usb": {
+     "vendor": "04a7",
+     "product": "049b",
+     "bcd": null
+    },
+    "line": 1901
+   },
+   {
+    "id": "pentax-dsmobile-600",
+    "vendor": "Pentax",
+    "model": "DSmobile 600",
+    "usb": {
+     "vendor": "0a17",
+     "product": "3210",
+     "bcd": null
+    },
+    "line": 1951
+   },
+   {
+    "id": "pentax-dsmobile-600",
+    "vendor": "Pentax",
+    "model": "DSmobile 600",
+    "usb": {
+     "vendor": "04f9",
+     "product": "2038",
+     "bcd": null
+    },
+    "line": 1953
+   },
+   {
+    "id": "syscan-docketport-467",
+    "vendor": "Syscan",
+    "model": "DocketPORT 467",
+    "usb": {
+     "vendor": "1dcc",
+     "product": "4812",
+     "bcd": null
+    },
+    "line": 2002
+   },
+   {
+    "id": "syscan-docketport-685",
+    "vendor": "Syscan/Ambir",
+    "model": "DocketPORT 685",
+    "usb": {
+     "vendor": "0a82",
+     "product": "480c",
+     "bcd": null
+    },
+    "line": 2053
+   },
+   {
+    "id": "syscan-docketport-485",
+    "vendor": "Syscan/Ambir",
+    "model": "DocketPORT 485",
+    "usb": {
+     "vendor": "0a82",
+     "product": "4800",
+     "bcd": null
+    },
+    "line": 2104
+   },
+   {
+    "id": "dct-docketport-487",
+    "vendor": "DCT",
+    "model": "DocketPORT 487",
+    "usb": {
+     "vendor": "1dcc",
+     "product": "4810",
+     "bcd": null
+    },
+    "line": 2157
+   },
+   {
+    "id": "visioneer-7100-model",
+    "vendor": "Visioneer",
+    "model": "OneTouch 7100",
+    "usb": {
+     "vendor": "04a7",
+     "product": "0229",
+     "bcd": null
+    },
+    "line": 2213
+   },
+   {
+    "id": "xerox-2400-model",
+    "vendor": "Xerox",
+    "model": "OneTouch 2400",
+    "usb": {
+     "vendor": "0461",
+     "product": "038b",
+     "bcd": null
+    },
+    "line": 2269
+   },
+   {
+    "id": "xerox-travelscanner",
+    "vendor": "Xerox",
+    "model": "Travelscanner 100",
+    "usb": {
+     "vendor": "04a7",
+     "product": "04ac",
+     "bcd": null
+    },
+    "line": 2320
+   },
+   {
+    "id": "plustek-opticbook-3600",
+    "vendor": "PLUSTEK",
+    "model": "OpticBook 3600",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0900",
+     "bcd": null
+    },
+    "line": 2372
+   },
+   {
+    "id": "plustek-opticfilm-7200",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 7200",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0807",
+     "bcd": null
+    },
+    "line": 2438
+   },
+   {
+    "id": "plustek-opticfilm-7200i",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 7200i",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0c04",
+     "bcd": null
+    },
+    "line": 2504
+   },
+   {
+    "id": "plustek-opticfilm-7200-v2",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 7200 v2",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0c07",
+     "bcd": null
+    },
+    "line": 2517
+   },
+   {
+    "id": "plustek-opticfilm-7300",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 7300",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0c12",
+     "bcd": null
+    },
+    "line": 2582
+   },
+   {
+    "id": "plustek-opticfilm-7400-v1",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 7400 (v1)",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0c3a",
+     "bcd": "0400"
+    },
+    "line": 2609
+   },
+   {
+    "id": "plustek-opticfilm-7400-v2",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 7400 (v2)",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0c3a",
+     "bcd": "0605"
+    },
+    "line": 2672
+   },
+   {
+    "id": "plustek-opticfilm-8100",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 8100",
+    "usb": {
+     "vendor": "07b3",
+     "product": "130c",
+     "bcd": null
+    },
+    "line": 2678
+   },
+   {
+    "id": "plustek-opticfilm-7500i",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 7500i",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0c13",
+     "bcd": null
+    },
+    "line": 2743
+   },
+   {
+    "id": "plustek-opticfilm-7600i-v1",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 7600i (v1)",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0c3b",
+     "bcd": "0400"
+    },
+    "line": 2754
+   },
+   {
+    "id": "plustek-opticfilm-8200i",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 8200i",
+    "usb": {
+     "vendor": "07b3",
+     "product": "130d",
+     "bcd": null
+    },
+    "line": 2818
+   },
+   {
+    "id": "plustek-opticfilm-7600i-v2",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 7600i (v2)",
+    "usb": {
+     "vendor": "07b3",
+     "product": "0c3b",
+     "bcd": "0605"
+    },
+    "line": 2824
+   },
+   {
+    "id": "plustek-opticfilm-8200i-se",
+    "vendor": "PLUSTEK",
+    "model": "OpticFilm 8200i SE",
+    "usb": {
+     "vendor": "07b3",
+     "product": "1825",
+     "bcd": null
+    },
+    "line": 2901
+   },
+   {
+    "id": "hewlett-packard-scanjet-N6310",
+    "vendor": "Hewlett Packard",
+    "model": "ScanJet N6310",
+    "usb": {
+     "vendor": "03f0",
+     "product": "4705",
+     "bcd": null
+    },
+    "line": 2958
+   },
+   {
+    "id": "plustek-opticbook-3800",
+    "vendor": "PLUSTEK",
+    "model": "OpticBook 3800",
+    "usb": {
+     "vendor": "07b3",
+     "product": "1300",
+     "bcd": null
+    },
+    "line": 3008
+   },
+   {
+    "id": "canon-image-formula-101",
+    "vendor": "Canon",
+    "model": "Image Formula 101",
+    "usb": {
+     "vendor": "1083",
+     "product": "162e",
+     "bcd": null
+    },
+    "line": 3059
+   }
+  ]
+ }
+}

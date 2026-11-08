@@ -1,0 +1,144 @@
+diff --git a/backend/genesys/gl128.cpp b/backend/genesys/gl128.cpp
+index 88606d5aff1431a964268b6fa0ba7024ac39d483..8b6a1cb65708b50158a47327983c508059ce2d18 100644
+--- a/backend/genesys/gl128.cpp
++++ b/backend/genesys/gl128.cpp
+@@ -1560,8 +1560,14 @@ void CommandSetGl128::asic_boot(Genesys_Device* dev, bool cold) const
+         const std::uint8_t value = r.addr == 0xa0 ? step_select : r.value;
+         dev->interface->write_register(r.addr, value);
+         // Shared code (e.g. regs_set_optical_off()) looks registers up in
+-        // dev->reg, so every boot register must exist there.
+-        dev->reg.init_reg(r.addr, value);
++        // dev->reg, so every boot register must exist there, except the
++        // frontend bridge: a write to 0x5e commits a value to the AFE register
++        // selected through 0x51. Cached, the boot 0x5e would be replayed by
++        // every write_registers(dev->reg) (e.g. in genesys_start_scan()) and
++        // overwrite the last AFE register set_fe() wrote, 7 (blue offset).
++        if (r.addr != REG_FE_INDEX && r.addr != REG_FE_HIGH && r.addr != REG_FE_LOW) {
++            dev->reg.init_reg(r.addr, value);
++        }
+     }
+ 
+     // 0x01 is set per scan, but shared code may read it from dev->reg before
+diff --git a/testsuite/backend/genesys/tests_gl128.cpp b/testsuite/backend/genesys/tests_gl128.cpp
+index a3cf5ca5ee812a1a6d13365366986115a4871022..0855b6793487c2275d6a693b3210e36fc0303db0 100644
+--- a/testsuite/backend/genesys/tests_gl128.cpp
++++ b/testsuite/backend/genesys/tests_gl128.cpp
+@@ -25,8 +25,11 @@
+ #include "minigtest.h"
+ 
+ #include "../../../backend/genesys/gl128.h"
++#include "../../../backend/genesys/gl128_registers.h"
+ #include "../../../backend/genesys/low.h"
++#include "../../../backend/genesys/test_scanner_interface.h"
+ 
++#include <array>
+ #include <cmath>
+ 
+ namespace genesys {
+@@ -216,6 +219,97 @@ void test_gl128_session_gray()
+     ASSERT_FALSE(c.use_host_side_gray);
+ }
+ 
++// The frontend bridge registers are commands, so asic_boot() must not leave
++// them in dev->reg, which shared code writes back to the scanner as a whole.
++void test_gl128_boot_does_not_cache_fe_bridge()
++{
++    Gl128Fixture f;
++    f.dev.interface.reset(new TestScannerInterface(&f.dev, 0x07b3, 0x1825, 0));
++    for (unsigned i = 0; i < 8; i++) {
++        f.dev.frontend_initial.regs.set_value(i, 0);
++    }
++    f.cmd_set.asic_boot(&f.dev, false);
++
++    ASSERT_FALSE(f.dev.reg.has_reg(gl128::REG_FE_INDEX));
++    ASSERT_FALSE(f.dev.reg.has_reg(gl128::REG_FE_HIGH));
++    ASSERT_FALSE(f.dev.reg.has_reg(gl128::REG_FE_LOW));
++}
++
++namespace {
++
++// Records AFE registers the way write_fe_register() programs them: 0x51
++// selects the AFE register and 0x5e commits 0x5d:0x5e to it.
++class AfeBridgeInterface : public TestScannerInterface
++{
++public:
++    explicit AfeBridgeInterface(Genesys_Device* dev) :
++        TestScannerInterface(dev, 0x07b3, 0x1825, 0)
++    {}
++
++    void write_register(std::uint16_t address, std::uint8_t value) override
++    {
++        TestScannerInterface::write_register(address, value);
++        if (address == gl128::REG_FE_INDEX) {
++            index_ = value & 0x07;
++        } else if (address == gl128::REG_FE_HIGH) {
++            high_ = value;
++        } else if (address == gl128::REG_FE_LOW) {
++            afe[index_] = static_cast<std::uint16_t>((high_ << 8) | value);
++        }
++    }
++
++    // ScannerInterfaceUsb writes GL128 register sets one register at a time,
++    // in order.
++    void write_registers(const Genesys_Register_Set& regs) override
++    {
++        for (const auto& reg : regs) {
++            write_register(reg.address, reg.value);
++        }
++    }
++
++    void write_fe_register(std::uint8_t address, std::uint16_t value) override
++    {
++        write_register(gl128::REG_FE_INDEX, address);
++        write_register(gl128::REG_FE_HIGH, (value >> 8) & 0xff);
++        write_register(gl128::REG_FE_LOW, value & 0xff);
++    }
++
++    std::array<std::uint16_t, 8> afe{};
++
++private:
++    unsigned index_ = 0;
++    std::uint8_t high_ = 0;
++};
++
++} // namespace
++
++// genesys_start_scan() writes dev->reg after set_fe(); that must not change
++// the AFE registers set_fe() programmed.
++void test_gl128_afe_survives_register_flush()
++{
++    Gl128Fixture f;
++    auto* iface = new AfeBridgeInterface(&f.dev);
++    f.dev.interface.reset(iface);
++    for (unsigned i = 0; i < 8; i++) {
++        f.dev.frontend_initial.regs.set_value(i, 0);
++    }
++    f.cmd_set.asic_boot(&f.dev, false);
++
++    const std::uint16_t afe[8] = { 0xf8, 0x80, 41, 35, 42, 0x137, 0x136, 61 };
++    for (unsigned i = 0; i < 8; i++) {
++        f.dev.frontend.regs.set_value(i, afe[i]);
++    }
++    f.cmd_set.set_fe(&f.dev, sensor_for(7200), AFE_SET);
++    for (unsigned i = 0; i < 8; i++) {
++        ASSERT_EQ(iface->afe[i], afe[i]);
++    }
++
++    f.dev.interface->write_registers(f.dev.reg);
++    for (unsigned i = 0; i < 8; i++) {
++        ASSERT_EQ(iface->afe[i], afe[i]);
++    }
++}
++
+ void test_gl128()
+ {
+     genesys_init_usb_device_tables();
+@@ -228,6 +322,8 @@ void test_gl128()
+     test_gl128_session_mirror();
+     test_gl128_session_lines();
+     test_gl128_session_gray();
++    test_gl128_boot_does_not_cache_fe_bridge();
++    test_gl128_afe_survives_register_flush();
+ }
+ 
+ } // namespace genesys

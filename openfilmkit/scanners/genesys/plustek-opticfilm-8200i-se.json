@@ -1,0 +1,24 @@
+{
+ "id": "genesys/plustek-opticfilm-8200i-se",
+ "name": "Plustek OpticFilm 8200i SE (GL128)",
+ "kind": "film",
+ "capture": {
+  "source": "Transparency Adapter",
+  "mode": "Color",
+  "depth": 16,
+  "dpi": [900, 1800, 3600, 7200],
+  "default_dpi": 7200
+ },
+ "frame_mm": {"width": 36.58, "height": 25.0, "min_width": 34.0, "min_height": 23.0},
+ "infrared": false,
+ "requires_patches": ["0001-gl128-afe-port-replay.diff"],
+ "hardware_record": [
+  {"date": "2026-11-04", "driver": "SANE 6b5186ad, unpatched (film-scan)",
+   "result": "66 frames at 7200 dpi, 48-bit linear TIFF; blue offset bug found in these scans"}
+ ],
+ "notes": [
+  "SANE status: basic. Infrared is not implemented for GL128.",
+  "The holder is positioned by hand; one frame per scan.",
+  "The USB serial number string is the firmware date."
+ ]
+}

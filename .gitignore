@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
-dist/
+.build/
+._*
+.DS_Store
+tools/research/sources/
 build/
 *.egg-info/
-.DS_Store
+dist/

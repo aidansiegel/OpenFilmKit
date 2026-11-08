@@ -1,0 +1,19 @@
+{
+ "repository": "https://gitlab.com/sane-project/backends.git",
+ "commit": "8ebb7c50e3ea4820cd8f62eccc4516e326ddbbb3",
+ "committed": "2026-11-06",
+ "version_label": "1.4.0-dev",
+ "backends": ["genesys", "test"],
+ "cflags": "-O1 -g0",
+ "cxxflags": "-O1 -g0",
+ "configure": [
+  "--disable-static",
+  "--enable-local-backends",
+  "--with-usb=yes",
+  "--without-gphoto2",
+  "--without-snmp",
+  "--without-avahi",
+  "--without-systemd",
+  "--disable-locking"
+ ]
+}

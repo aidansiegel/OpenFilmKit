@@ -1,0 +1,158 @@
+import contextlib
+import io
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+try:
+    import numpy as np
+    from PIL import Image
+    from openfilmkit import clean
+    from openfilmkit.clean import redeye, restore
+except ImportError:
+    clean = None
+from openfilmkit import cli, roll
+
+
+def scene(w=900, h=600, seed=3):
+    """A smooth, slightly noisy photo-like gradient."""
+    rng = np.random.default_rng(seed)
+    y, x = np.mgrid[:h, :w]
+    base = np.stack([90 + 60 * x / w, 100 + 40 * y / h, 120 - 30 * x / w], 2)
+    return np.clip(base + rng.normal(0, 3, base.shape), 0, 255).astype(np.uint8)
+
+
+@unittest.skipIf(clean is None, 'needs OpenCV, numpy and Pillow')
+class Clean(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def write(self, img, name='frame-v1.jpg'):
+        path = self.root / name
+        Image.fromarray(img).save(path, quality=98, subsampling=0)
+        return path
+
+    def test_dust_is_removed_and_recipe_written(self):
+        img = scene()
+        specks = [(150, 200), (420, 330), (700, 120), (610, 480)]
+        for x, y in specks:
+            img[y:y + 3, x:x + 3] = 255
+        src = self.write(img)
+        rec = clean.clean(src, protect_faces=False)
+        out = np.asarray(Image.open(rec['output']).convert('RGB')).astype(int)
+        for x, y in specks:
+            self.assertLess(out[y + 1, x + 1].max(), 200, (x, y))
+        dust = [s for s in rec['steps'] if s['step'] == 'dust'][0]
+        self.assertGreater(dust['pixels_filled'], 0)
+        recipe = json.loads(Path(rec['output'] + '.json').read_text())
+        self.assertEqual(recipe['source_sha256'], clean.sha(src))
+        self.assertEqual(recipe['output_sha256'], clean.sha(rec['output']))
+        self.assertFalse(recipe['generative_processing'])
+        self.assertEqual(Path(rec['output']).name, 'frame-v1-clean-v1.jpg')
+
+    def test_date_stamp_is_protected(self):
+        img = scene()
+        img[540:546, 760:790] = (235, 90, 40)   # orange LED digits in the bottom-right band
+        img[542:544, 770:772] = (255, 255, 255)  # a bright spot inside the stamp
+        rec = clean.clean(self.write(img), protect_faces=False, crop=False)
+        out = np.asarray(Image.open(rec['output']).convert('RGB')).astype(int)
+        self.assertGreater(out[543, 771].min(), 200)
+        self.assertGreater([s for s in rec['steps'] if s['step'] == 'dust'][0]['stamp_pixels_protected'], 0)
+
+    def test_whole_face_box_is_protected_without_landmarks(self):
+        m = restore.feature_mask((100, 100, 3), [{'box': [20, 30, 60, 80]}])
+        self.assertTrue(m[30:80, 20:60].all())
+        self.assertFalse(m[:30].any() or m[80:].any())
+
+    def test_holder_strip_is_cropped(self):
+        img = scene()
+        img[:, :30] = 255                       # light past the holder along the left edge
+        rec = clean.clean(self.write(img), protect_faces=False, dust=False)
+        crop = [s for s in rec['steps'] if s['step'] == 'crop'][0]
+        self.assertTrue(crop['changed'])
+        self.assertGreaterEqual(crop['box'][0], 30)
+        self.assertEqual(rec['output_dimensions'][1], 600)
+
+    def test_red_pupil_turns_dark_and_neutral(self):
+        img = np.full((200, 200, 3), (200, 160, 140), np.uint8)   # skin
+        yy, xx = np.mgrid[:200, :200]
+        img[np.hypot(yy - 100, xx - 100) <= 5] = (220, 40, 40)    # flash-red pupil
+        out, fixed = redeye.correct(img, [{'box': [0, 0, 200, 200], 'kps': [[100, 100], [150, 150]]}])
+        self.assertEqual(fixed, [(0, 0)])
+        r, g, b = out[100, 100].astype(int)
+        self.assertLess(r, 80)
+        self.assertLess(abs(r - g), 25)
+        self.assertTrue(np.array_equal(out[10, 10], img[10, 10]))
+
+    def test_reproducible_and_never_overwrites(self):
+        src = self.write(scene())
+        a = clean.clean(src, self.root / 'a.jpg', protect_faces=False)
+        b = clean.clean(src, self.root / 'b.jpg', protect_faces=False)
+        self.assertEqual(Path(a['output']).read_bytes(), Path(b['output']).read_bytes())
+        with self.assertRaises(clean.CleanError):
+            clean.clean(src, self.root / 'a.jpg')
+        with self.assertRaises(clean.CleanError):
+            clean.clean(src, src)
+
+    def test_dust_can_be_left_for_later(self):
+        r = self.root / 'roll-02'
+        roll.create(r)
+        (r / 'derived').mkdir()
+        img = scene()
+        img[300:303, 450:453] = 255
+        Image.fromarray(img).save(r / 'derived' / 'frame-01-v1.jpg', quality=98, subsampling=0)
+
+        def run(*flags):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cli.main(['clean', str(r), '--json', '--no-faces', *flags]), 0)
+            return json.loads(out.getvalue())
+
+        first = run('--no-dust')
+        self.assertEqual([s['step'] for s in first[0]['steps']], ['crop'])
+        self.assertEqual(run('--no-dust'), [])          # same settings: already done
+        later = run()                                    # dust now, from the original conversion
+        self.assertEqual(later[0]['source'], first[0]['source'])
+        self.assertEqual(Path(later[0]['output']).name, 'frame-01-v1-clean-v2.jpg')
+        self.assertGreater(later[0]['steps'][0]['pixels_filled'], 0)
+        self.assertEqual(run(), [])
+
+    def test_unreadable_file_fails_alone(self):
+        bad = self.root / 'broken.jpg'
+        bad.write_bytes(b'not an image')
+        with self.assertRaises(clean.CleanError):
+            clean.clean(bad)
+
+    def test_sixteen_bit_master_is_refused(self):
+        p = self.root / 'master.png'
+        Image.fromarray(np.full((10, 10), 30000, np.uint16)).save(p)
+        with self.assertRaises(clean.CleanError):
+            clean.clean(p)
+
+    def test_roll_cleans_each_conversion_once(self):
+        r = self.root / 'roll-01'
+        roll.create(r)
+        (r / 'derived').mkdir()
+        for name in ('frame-01-v1.jpg', 'frame-02-v1.jpg'):
+            Image.fromarray(scene()).save(r / 'derived' / name, quality=95)
+        (r / 'derived' / '._frame-01-v1.jpg').write_bytes(b'\0\5\26\7')   # exFAT sidecar
+        for expected in (2, 0):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = cli.main(['clean', str(r), '--json', '--no-faces'])
+            self.assertEqual(code, 0)
+            self.assertEqual(len(json.loads(out.getvalue())), expected)
+        self.assertEqual(sorted(p.name for p in (r / 'derived').glob('*-clean-v1.jpg')),
+                         ['frame-01-v1-clean-v1.jpg', 'frame-02-v1-clean-v1.jpg'])
+
+
+if __name__ == '__main__':
+    unittest.main()

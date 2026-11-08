@@ -1,0 +1,1777 @@
+{
+  "schema_version": 1,
+  "stocks": [
+    {
+      "id": "unknown",
+      "name": "Unknown color-negative film",
+      "iso": null,
+      "default_profile": "generic",
+      "aliases": [
+        "unknown"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "unknown-100",
+      "name": "Unknown-brand ISO 100",
+      "iso": 100,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Speed is known; manufacturer and emulsion are unidentified. ISO alone cannot select a film response."
+    },
+    {
+      "id": "unknown-200",
+      "name": "Unknown-brand ISO 200",
+      "iso": 200,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Speed is known; manufacturer and emulsion are unidentified. ISO alone cannot select a film response."
+    },
+    {
+      "id": "unknown-400",
+      "name": "Unknown-brand ISO 400",
+      "iso": 400,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Speed is known; manufacturer and emulsion are unidentified. ISO alone cannot select a film response."
+    },
+    {
+      "id": "unknown-800",
+      "name": "Unknown-brand ISO 800",
+      "iso": 800,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Speed is known; manufacturer and emulsion are unidentified. ISO alone cannot select a film response."
+    },
+    {
+      "id": "kirkland-200",
+      "name": "Kirkland Signature 200",
+      "iso": 200,
+      "default_profile": "generic",
+      "aliases": [
+        "kirland sig 200",
+        "Kirkland 200"
+      ],
+      "candidate_profiles": [
+        "agfa-hdc200",
+        "agfa-vista200",
+        "fuji-superia200",
+        "fuji-superia200-af3-207u"
+      ],
+      "identity_note": "Private-label brand whose supplier changed over the years. Choose the candidate that matches the roll: Made in Germany suggests the Agfa HDC Plus or Vista curves; Made in Japan suggests the Fuji curve. No verified supplier-by-year schedule exists, so the year alone does not identify the manufacturer; record edge markings and cartridge text."
+    },
+    {
+      "id": "kirkland-400",
+      "name": "Kirkland Signature 400",
+      "iso": 400,
+      "default_profile": "generic",
+      "aliases": [
+        "kirland sig 400",
+        "Kirkland 400"
+      ],
+      "candidate_profiles": [
+        "agfa-hdc400",
+        "agfa-vista400",
+        "fuji-superia400",
+        "fuji-superia400-af3-151e"
+      ],
+      "identity_note": "Private-label brand whose supplier changed over the years. Choose the candidate that matches the roll: Made in Germany suggests the Agfa HDC Plus or Vista curves; Made in Japan suggests the Fuji curve. No verified supplier-by-year schedule exists, so the year alone does not identify the manufacturer; record edge markings and cartridge text."
+    },
+    {
+      "id": "imation-100",
+      "name": "Imation 100",
+      "iso": 100,
+      "default_profile": "generic",
+      "aliases": [
+        "Imation Color HP 100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "3M/Imation/Ferrania family history documented, but no validated stock-specific numerical curve bundled. Generic conversion; do not substitute Agfa silently."
+    },
+    {
+      "id": "scotch-100",
+      "name": "Scotch 100",
+      "iso": 100,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "3M/Imation/Ferrania family history documented, but no validated stock-specific numerical curve bundled. Generic conversion; do not substitute Agfa silently."
+    },
+    {
+      "id": "ferrania-solaris-100",
+      "name": "Ferrania Solaris 100",
+      "iso": 100,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "3M/Imation/Ferrania family history documented, but no validated stock-specific numerical curve bundled. Generic conversion; do not substitute Agfa silently."
+    },
+    {
+      "id": "imation-200",
+      "name": "Imation 200",
+      "iso": 200,
+      "default_profile": "generic",
+      "aliases": [
+        "Imation Color HP 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "3M/Imation/Ferrania family history documented, but no validated stock-specific numerical curve bundled. Generic conversion; do not substitute Agfa silently."
+    },
+    {
+      "id": "scotch-200",
+      "name": "Scotch 200",
+      "iso": 200,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "3M/Imation/Ferrania family history documented, but no validated stock-specific numerical curve bundled. Generic conversion; do not substitute Agfa silently."
+    },
+    {
+      "id": "ferrania-solaris-200",
+      "name": "Ferrania Solaris 200",
+      "iso": 200,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "3M/Imation/Ferrania family history documented, but no validated stock-specific numerical curve bundled. Generic conversion; do not substitute Agfa silently."
+    },
+    {
+      "id": "imation-400",
+      "name": "Imation 400",
+      "iso": 400,
+      "default_profile": "generic",
+      "aliases": [
+        "Imation Color HP 400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "3M/Imation/Ferrania family history documented, but no validated stock-specific numerical curve bundled. Generic conversion; do not substitute Agfa silently."
+    },
+    {
+      "id": "scotch-400",
+      "name": "Scotch 400",
+      "iso": 400,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "3M/Imation/Ferrania family history documented, but no validated stock-specific numerical curve bundled. Generic conversion; do not substitute Agfa silently."
+    },
+    {
+      "id": "ferrania-solaris-400",
+      "name": "Ferrania Solaris 400",
+      "iso": 400,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "3M/Imation/Ferrania family history documented, but no validated stock-specific numerical curve bundled. Generic conversion; do not substitute Agfa silently."
+    },
+    {
+      "id": "kodak-gold100",
+      "name": "Kodak Gold 100",
+      "iso": 100,
+      "default_profile": "kodak-gold100",
+      "aliases": [
+        "Kodacolor Gold 100"
+      ],
+      "candidate_profiles": [
+        "kodak-gold100-e7022"
+      ],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "kodak-gold200",
+      "name": "Kodak Gold 200",
+      "iso": 200,
+      "default_profile": "kodak-gold200",
+      "aliases": [
+        "Kodacolor Gold 200"
+      ],
+      "candidate_profiles": [
+        "kodak-gold200-e7022"
+      ],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "kodak-gc400-8",
+      "name": "Kodak GC 400-8 / Gold-Max-Ultra Max 400 family",
+      "iso": 400,
+      "default_profile": "kodak-gc400-8",
+      "aliases": [
+        "Kodak GC 400-8",
+        "GC 400-8",
+        "Kodak Ultra Max 400",
+        "Ultra Max 400",
+        "UltraMax 400",
+        "Kodak Max 400"
+      ],
+      "candidate_profiles": [
+        "kodak-ultramax400-e7023"
+      ],
+      "identity_note": "Identified from the GC 400-8 edge marking. Uses Kodak E-7019 (February 2007) as an approximate curve reference, not a manufacture date or exact retail-name assertion."
+    },
+    {
+      "id": "kodak-max800",
+      "name": "Kodak Max Zoom 800",
+      "iso": 800,
+      "default_profile": "kodak-max800",
+      "aliases": [
+        "Kodak Max 800"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "agfa-hdc100",
+      "name": "Agfa HDC Plus 100",
+      "iso": 100,
+      "default_profile": "agfa-hdc100",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "agfa-hdc200",
+      "name": "Agfa HDC Plus 200",
+      "iso": 200,
+      "default_profile": "agfa-hdc200",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "agfa-hdc400",
+      "name": "Agfa HDC Plus 400",
+      "iso": 400,
+      "default_profile": "agfa-hdc400",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "agfa-vista100",
+      "name": "Agfa Vista 100 (original Agfa generation)",
+      "iso": 100,
+      "default_profile": "agfa-vista100",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Original Agfa Vista response in DoRF; not interchangeable with later AgfaPhoto/Vista Plus relabels."
+    },
+    {
+      "id": "agfa-vista200",
+      "name": "Agfa Vista 200 (original Agfa generation)",
+      "iso": 200,
+      "default_profile": "agfa-vista200",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Original Agfa Vista response in DoRF; not interchangeable with later AgfaPhoto/Vista Plus relabels."
+    },
+    {
+      "id": "agfa-vista400",
+      "name": "Agfa Vista 400 (original Agfa generation)",
+      "iso": 400,
+      "default_profile": "agfa-vista400",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Original Agfa Vista response in DoRF; not interchangeable with later AgfaPhoto/Vista Plus relabels."
+    },
+    {
+      "id": "agfa-vista800",
+      "name": "Agfa Vista 800 (original Agfa generation)",
+      "iso": 800,
+      "default_profile": "agfa-vista800",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Original Agfa Vista response in DoRF; not interchangeable with later AgfaPhoto/Vista Plus relabels."
+    },
+    {
+      "id": "agfa-futura100",
+      "name": "Agfa Futura 100",
+      "iso": 100,
+      "default_profile": "agfa-futura100",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "agfa-futura200",
+      "name": "Agfa Futura 200",
+      "iso": 200,
+      "default_profile": "agfa-futura200",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "agfa-futura400",
+      "name": "Agfa Futura 400",
+      "iso": 400,
+      "default_profile": "agfa-futura400",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "kodak-advantix100",
+      "name": "Kodak Advantix 100",
+      "iso": 100,
+      "default_profile": "kodak-advantix100",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "kodak-advantix200",
+      "name": "Kodak Advantix 200",
+      "iso": 200,
+      "default_profile": "kodak-advantix200",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "kodak-advantix400",
+      "name": "Kodak Advantix 400",
+      "iso": 400,
+      "default_profile": "kodak-advantix400",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Film name supplied by operator; profile is a historical starting point, not proof of an exact emulsion generation."
+    },
+    {
+      "id": "kodak-portra160nc",
+      "name": "Kodak Portra 160NC (historical)",
+      "iso": 160,
+      "default_profile": "kodak-portra160nc",
+      "aliases": [],
+      "candidate_profiles": [
+        "kodak-portra160nc-e4040",
+        "kodak-portra160nc-e190"
+      ],
+      "identity_note": "Historical DoRF Portra stock; not automatically the later reformulated Portra with a similar name."
+    },
+    {
+      "id": "kodak-portra400nc",
+      "name": "Kodak Portra 400NC (historical)",
+      "iso": 400,
+      "default_profile": "kodak-portra400nc",
+      "aliases": [],
+      "candidate_profiles": [
+        "kodak-portra400nc-e4040",
+        "kodak-portra400nc-e190"
+      ],
+      "identity_note": "Historical DoRF Portra stock; not automatically the later reformulated Portra with a similar name."
+    },
+    {
+      "id": "kodak-portra800",
+      "name": "Kodak Portra 800 (historical)",
+      "iso": 800,
+      "default_profile": "kodak-portra800",
+      "aliases": [],
+      "candidate_profiles": [
+        "kodak-portra800-e4040",
+        "kodak-portra800-e4040-2006"
+      ],
+      "identity_note": "Historical DoRF Portra stock; not automatically the later reformulated Portra with a similar name."
+    },
+    {
+      "id": "fuji-superia400",
+      "name": "Fujicolor Superia X-TRA 400 [CH]",
+      "iso": 400,
+      "default_profile": "fuji-superia400",
+      "aliases": [
+        "Fuji Superia 400",
+        "Superia 400"
+      ],
+      "candidate_profiles": [
+        "fuji-superia400-af3-151e"
+      ],
+      "identity_note": "Uses manufacturer AF3-0217E characteristic curves, not a scanner calibration. CH has multiple generations; preserve edge markings."
+    },
+    {
+      "id": "fuji-superia100",
+      "name": "Fujicolor Superia 100",
+      "iso": 100,
+      "default_profile": "fuji-superia100",
+      "aliases": [
+        "Fuji Superia 100"
+      ],
+      "candidate_profiles": [
+        "fuji-superia100-af3-207u"
+      ],
+      "identity_note": "Uses manufacturer AF3-007E [CN], 1998 characteristic curves traced from a scanned chart, not a scanner calibration. Later Superia generations may differ; preserve edge markings."
+    },
+    {
+      "id": "fuji-superia200",
+      "name": "Fujicolor Superia 200",
+      "iso": 200,
+      "default_profile": "fuji-superia200",
+      "aliases": [
+        "Fuji Superia 200"
+      ],
+      "candidate_profiles": [
+        "fuji-superia200-af3-207u"
+      ],
+      "identity_note": "Uses manufacturer AF3-008E [CA], 1998 characteristic curves traced from a scanned chart, not a scanner calibration. Later Superia generations may differ; preserve edge markings."
+    },
+    {
+      "id": "fuji-superia800",
+      "name": "Fujicolor Superia 800",
+      "iso": 800,
+      "default_profile": "fuji-superia800",
+      "aliases": [
+        "Fuji Superia 800"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration. Fujicolor Press 800 shares these curves."
+    },
+    {
+      "id": "konica-vx100",
+      "name": "Konica VX 100",
+      "iso": 100,
+      "default_profile": "konica-vx100",
+      "aliases": [],
+      "candidate_profiles": [
+        "konica-vxsuper100"
+      ],
+      "identity_note": "Uses manufacturer characteristic curves (Konica Color VX 100 technical data (undated)), not a scanner calibration. VX Super 100 is offered as an alternative."
+    },
+    {
+      "id": "konica-vx200",
+      "name": "Konica VX 200",
+      "iso": 200,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [
+        "konica-vxsuper200"
+      ],
+      "identity_note": "No curves found for the original VX; the later VX Super curves are offered as a candidate. Generic conversion by default."
+    },
+    {
+      "id": "konica-vx400",
+      "name": "Konica VX 400",
+      "iso": 400,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [
+        "konica-vxsuper400"
+      ],
+      "identity_note": "No curves found for the original VX; the later VX Super curves are offered as a candidate. Generic conversion by default."
+    },
+    {
+      "id": "konica-centuria100",
+      "name": "Konica Centuria 100",
+      "iso": 100,
+      "default_profile": "konica-centuria100",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Konica Color Centuria Super 100 technical data (2002)), not a scanner calibration. Curves are from the Centuria Super generation."
+    },
+    {
+      "id": "konica-centuria200",
+      "name": "Konica Centuria 200",
+      "iso": 200,
+      "default_profile": "konica-centuria200",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Konica Color Centuria Super 200 technical data (2002)), not a scanner calibration. Curves are from the Centuria Super generation."
+    },
+    {
+      "id": "konica-centuria400",
+      "name": "Konica Centuria 400",
+      "iso": 400,
+      "default_profile": "generic",
+      "aliases": [],
+      "candidate_profiles": [],
+      "identity_note": "Recognized historical consumer stock. No verified numerical profile bundled; generic conversion, without guessing a Fuji equivalent."
+    },
+    {
+      "id": "kodak-ektar100",
+      "name": "Kodak Professional Ektar 100",
+      "iso": 100,
+      "default_profile": "kodak-ektar100",
+      "aliases": [
+        "Kodak Ektar 100",
+        "Ektar 100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer Kodak E-4046 (2016) characteristic curves, not a scanner calibration. Modern Ektar (2008 onward), not the 1989-1997 Ektar 125/1000 family."
+    },
+    {
+      "id": "kodak-portra160",
+      "name": "Kodak Professional Portra 160 (2010 onward)",
+      "iso": 160,
+      "default_profile": "kodak-portra160",
+      "aliases": [
+        "Kodak Portra 160",
+        "Portra 160"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer Kodak E-4051 (2016) characteristic curves, not a scanner calibration. Not the earlier Portra 160NC/VC; use kodak-portra160nc for those."
+    },
+    {
+      "id": "kodak-portra400",
+      "name": "Kodak Professional Portra 400 (2010 onward)",
+      "iso": 400,
+      "default_profile": "kodak-portra400",
+      "aliases": [
+        "Kodak Portra 400",
+        "Portra 400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer Kodak E-4050 (2016) characteristic curves, not a scanner calibration. Not the earlier Portra 400NC/VC; use kodak-portra400nc for those."
+    },
+    {
+      "id": "kodak-ultramax800",
+      "name": "Kodak Ultra Max 800",
+      "iso": 800,
+      "default_profile": "kodak-ultramax800",
+      "aliases": [
+        "Kodak Ultra Max 800",
+        "Ultra Max 800",
+        "UltraMax 800"
+      ],
+      "candidate_profiles": [
+        "kodak-portra800-e4040",
+        "kodak-max800"
+      ],
+      "identity_note": "Uses manufacturer Kodak E-7024 (2007) characteristic curves, not a scanner calibration. Max Zoom 800 is a separate, earlier DoRF profile offered as an alternative. Its published curves are the same as Portra 800 (E-4040), offered as an alternative."
+    },
+    {
+      "id": "kodak-royalgold100",
+      "name": "Kodak Royal Gold 100",
+      "iso": 100,
+      "default_profile": "kodak-royalgold100",
+      "aliases": [
+        "Royal Gold 100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer Kodak E-41 (1998) characteristic curves, not a scanner calibration."
+    },
+    {
+      "id": "kodak-royalgold200",
+      "name": "Kodak Royal Gold 200",
+      "iso": 200,
+      "default_profile": "kodak-royalgold200",
+      "aliases": [
+        "Royal Gold 200"
+      ],
+      "candidate_profiles": [
+        "kodak-royalgold200-e7006"
+      ],
+      "identity_note": "Uses manufacturer Kodak E-42 (1998) characteristic curves, not a scanner calibration. The 2002 RB sheet (E-7006) is offered as an alternative for later rolls."
+    },
+    {
+      "id": "kodak-royalgold400",
+      "name": "Kodak Royal Gold 400",
+      "iso": 400,
+      "default_profile": "kodak-royalgold400",
+      "aliases": [
+        "Royal Gold 400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer Kodak E-43 (1998) characteristic curves, not a scanner calibration."
+    },
+    {
+      "id": "kodak-hd200",
+      "name": "Kodak High Definition 200",
+      "iso": 200,
+      "default_profile": "kodak-hd200",
+      "aliases": [
+        "Kodak High Definition 200",
+        "High Definition 200",
+        "Kodak HD 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer Kodak E-7017 (2003) characteristic curves, not a scanner calibration. Its published curves match Royal Gold 200 / RB (E-7006) and Elite Color 200 (E-4039) within 0.004 density."
+    },
+    {
+      "id": "kodak-hd400",
+      "name": "Kodak High Definition 400",
+      "iso": 400,
+      "default_profile": "kodak-hd400",
+      "aliases": [
+        "Kodak High Definition 400",
+        "High Definition 400",
+        "Kodak HD 400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer Kodak E-7013 (2003) characteristic curves, not a scanner calibration. Its published curves match Elite Color 400 (E-4039) within 0.013 density."
+    },
+    {
+      "id": "kodak-elite200",
+      "name": "Kodak Professional Elite Color 200",
+      "iso": 200,
+      "default_profile": "kodak-elite200",
+      "aliases": [
+        "Kodak Elite Color 200",
+        "Elite Color 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer Kodak E-4039 (2006) characteristic curves, not a scanner calibration. Its published curves match High Definition 200 (E-7017) and Royal Gold 200 / RB (E-7006) within 0.004 density."
+    },
+    {
+      "id": "kodak-elite400",
+      "name": "Kodak Professional Elite Color 400",
+      "iso": 400,
+      "default_profile": "kodak-elite400",
+      "aliases": [
+        "Kodak Elite Color 400",
+        "Elite Color 400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer Kodak E-4039 (2006) characteristic curves, not a scanner calibration. Its published curves match High Definition 400 (E-7013) within 0.013 density."
+    },
+    {
+      "id": "fuji-reala",
+      "name": "Fujicolor Superia Reala",
+      "iso": 100,
+      "default_profile": "fuji-reala",
+      "aliases": [
+        "Fuji Reala",
+        "Fujicolor Reala",
+        "Superia Reala",
+        "Reala 100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer Fujifilm AF3-967E characteristic curves, not a scanner calibration. Earlier Reala generations may differ."
+    },
+    {
+      "id": "kodak-ektapress100",
+      "name": "Kodak Professional Ektapress PJ100",
+      "iso": 100,
+      "default_profile": "kodak-ektapress100",
+      "aliases": [
+        "Ektapress 100",
+        "Ektapress PJ100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-116, April 2003), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ektapress400",
+      "name": "Kodak Professional Ektapress PJ400",
+      "iso": 400,
+      "default_profile": "kodak-ektapress400",
+      "aliases": [
+        "Ektapress 400",
+        "Ektapress PJ400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-116, April 2003), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ektapress800",
+      "name": "Kodak Professional Ektapress PJ800",
+      "iso": 800,
+      "default_profile": "kodak-ektapress800",
+      "aliases": [
+        "Ektapress 800",
+        "Ektapress PJ800"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-116, April 2003), not a scanner calibration."
+    },
+    {
+      "id": "kodak-pro100",
+      "name": "Kodak Pro 100 (PRN)",
+      "iso": 100,
+      "default_profile": "kodak-pro100",
+      "aliases": [
+        "Kodak Pro 100",
+        "PRN"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-182, February 1997), not a scanner calibration."
+    },
+    {
+      "id": "kodak-pro100t",
+      "name": "Kodak Pro 100T (PRT)",
+      "iso": 100,
+      "default_profile": "kodak-pro100t",
+      "aliases": [
+        "Kodak Pro 100T",
+        "PRT"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-182, February 1997), not a scanner calibration. Tungsten-balanced."
+    },
+    {
+      "id": "kodak-pro400",
+      "name": "Kodak Pro 400 (PPF)",
+      "iso": 400,
+      "default_profile": "kodak-pro400",
+      "aliases": [
+        "Kodak Pro 400",
+        "PPF"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-182, February 1997), not a scanner calibration."
+    },
+    {
+      "id": "kodak-pro400mc",
+      "name": "Kodak Pro 400 MC (PMC)",
+      "iso": 400,
+      "default_profile": "kodak-pro400mc",
+      "aliases": [
+        "Kodak Pro 400 MC",
+        "PMC"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-182, February 1997), not a scanner calibration."
+    },
+    {
+      "id": "kodak-pro1000",
+      "name": "Kodak Pro 1000 (PMZ)",
+      "iso": 1000,
+      "default_profile": "kodak-pro1000",
+      "aliases": [
+        "Kodak Pro 1000",
+        "PMZ"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-182, February 1997), not a scanner calibration."
+    },
+    {
+      "id": "kodak-brightsun",
+      "name": "Kodak Bright Sun (GA)",
+      "iso": 100,
+      "default_profile": "kodak-brightsun",
+      "aliases": [
+        "Kodak Bright Sun",
+        "Bright Sun",
+        "GA100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-2328, July 2003), not a scanner calibration."
+    },
+    {
+      "id": "kodak-portra100t",
+      "name": "Kodak Professional Portra 100T",
+      "iso": 100,
+      "default_profile": "kodak-portra100t",
+      "aliases": [
+        "Kodak Portra 100T",
+        "Portra 100T"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-2468, revised October 2006), not a scanner calibration. Tungsten-balanced."
+    },
+    {
+      "id": "kodak-vericolor3",
+      "name": "Kodak Vericolor III Professional",
+      "iso": 160,
+      "default_profile": "kodak-vericolor3",
+      "aliases": [
+        "Vericolor III",
+        "Kodak Vericolor III",
+        "VPS III"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-26, April 1997), not a scanner calibration."
+    },
+    {
+      "id": "kodak-profoto100",
+      "name": "Kodak Professional Profoto 100",
+      "iso": 100,
+      "default_profile": "kodak-profoto100",
+      "aliases": [
+        "Profoto 100",
+        "Kodak Profoto 100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-2E, July 1997), not a scanner calibration."
+    },
+    {
+      "id": "kodak-royalgold25",
+      "name": "Kodak Royal Gold 25",
+      "iso": 25,
+      "default_profile": "kodak-royalgold25",
+      "aliases": [
+        "Royal Gold 25"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-40, December 1996), not a scanner calibration."
+    },
+    {
+      "id": "kodak-royalgold1000",
+      "name": "Kodak Royal Gold 1000",
+      "iso": 1000,
+      "default_profile": "kodak-royalgold1000",
+      "aliases": [
+        "Royal Gold 1000"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-44, February 1998), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ultracolor100",
+      "name": "Kodak Professional Ultra Color 100UC",
+      "iso": 100,
+      "default_profile": "kodak-ultracolor100",
+      "aliases": [
+        "Portra 100UC",
+        "Ultra Color 100UC",
+        "Kodak 100UC"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-4035, revised May 2007), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ultracolor400",
+      "name": "Kodak Professional Ultra Color 400UC",
+      "iso": 400,
+      "default_profile": "kodak-ultracolor400",
+      "aliases": [
+        "Portra 400UC",
+        "Ultra Color 400UC",
+        "Kodak 400UC"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-4035, revised May 2007), not a scanner calibration."
+    },
+    {
+      "id": "kodak-supra100",
+      "name": "Kodak Professional Supra 100",
+      "iso": 100,
+      "default_profile": "kodak-supra100",
+      "aliases": [
+        "Supra 100",
+        "Kodak Supra 100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-2519, May 2003), not a scanner calibration."
+    },
+    {
+      "id": "kodak-supra200",
+      "name": "Kodak Professional Supra 200",
+      "iso": 200,
+      "default_profile": "kodak-supra200",
+      "aliases": [
+        "Supra 200",
+        "Kodak Supra 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-4029, May 2003), not a scanner calibration."
+    },
+    {
+      "id": "kodak-supra400",
+      "name": "Kodak Professional Supra 400",
+      "iso": 400,
+      "default_profile": "kodak-supra400",
+      "aliases": [
+        "Supra 400",
+        "Kodak Supra 400"
+      ],
+      "candidate_profiles": [
+        "kodak-supra400-e2519"
+      ],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-4029, May 2003), not a scanner calibration. Kodak published two different Supra 400 curve sets in May 2003 (E-4029 default, E-2519 alternative)."
+    },
+    {
+      "id": "kodak-supra800",
+      "name": "Kodak Professional Supra 800",
+      "iso": 800,
+      "default_profile": "kodak-supra800",
+      "aliases": [
+        "Supra 800",
+        "Kodak Supra 800"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-4029, May 2003), not a scanner calibration."
+    },
+    {
+      "id": "kodak-royalsupra200",
+      "name": "Kodak Professional Royal Supra 200",
+      "iso": 200,
+      "default_profile": "kodak-royalsupra200",
+      "aliases": [
+        "Royal Supra 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-4026, June 2002), not a scanner calibration. Its published curves match Royal Gold 200 / RB (E-7006)."
+    },
+    {
+      "id": "kodak-royalsupra400",
+      "name": "Kodak Professional Royal Supra 400",
+      "iso": 400,
+      "default_profile": "kodak-royalsupra400",
+      "aliases": [
+        "Royal Supra 400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-4026, June 2002), not a scanner calibration. Its published curves match Supra 400 (E-4029)."
+    },
+    {
+      "id": "kodak-royalsupra800",
+      "name": "Kodak Professional Royal Supra 800",
+      "iso": 800,
+      "default_profile": "kodak-royalsupra800",
+      "aliases": [
+        "Royal Supra 800"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-4026, June 2002), not a scanner calibration. Its published curves match Supra 800 (E-4029)."
+    },
+    {
+      "id": "kodak-portra160vc",
+      "name": "Kodak Professional Portra 160VC",
+      "iso": 160,
+      "default_profile": "kodak-portra160vc",
+      "aliases": [
+        "Portra 160VC",
+        "Kodak Portra 160VC"
+      ],
+      "candidate_profiles": [
+        "kodak-portra160vc-e190"
+      ],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-4040, February 2009), not a scanner calibration. E-4040 (2006-2009) default; the earlier E-190 curves are an alternative."
+    },
+    {
+      "id": "kodak-portra400vc",
+      "name": "Kodak Professional Portra 400VC",
+      "iso": 400,
+      "default_profile": "kodak-portra400vc",
+      "aliases": [
+        "Portra 400VC",
+        "Kodak Portra 400VC"
+      ],
+      "candidate_profiles": [
+        "kodak-portra400vc-e190"
+      ],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak E-4040, February 2009), not a scanner calibration. E-4040 (2006-2009) default; the earlier E-190 curves are an alternative."
+    },
+    {
+      "id": "kodak-le100",
+      "name": "Kodak Professional Law Enforcement LE100",
+      "iso": 100,
+      "default_profile": "kodak-le100",
+      "aliases": [
+        "LE100",
+        "Kodak LE100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak LE-1, April 2003), not a scanner calibration."
+    },
+    {
+      "id": "kodak-le400",
+      "name": "Kodak Professional Law Enforcement LE400",
+      "iso": 400,
+      "default_profile": "kodak-le400",
+      "aliases": [
+        "LE400",
+        "Kodak LE400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak LE-1, April 2003), not a scanner calibration."
+    },
+    {
+      "id": "kodak-le800",
+      "name": "Kodak Professional Law Enforcement LE800",
+      "iso": 800,
+      "default_profile": "kodak-le800",
+      "aliases": [
+        "LE800",
+        "Kodak LE800"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak LE-1, April 2003), not a scanner calibration."
+    },
+    {
+      "id": "kodak-vision3-250d",
+      "name": "Kodak Vision3 250D (5207/7207)",
+      "iso": 250,
+      "default_profile": "kodak-vision3-250d",
+      "aliases": [
+        "Vision3 250D",
+        "Kodak 5207",
+        "5207"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak H-1-5207t, April 2009), not a scanner calibration. ECN-2 curves; C-41-processed Vision3 has different contrast."
+    },
+    {
+      "id": "kodak-vision3-500t",
+      "name": "Kodak Vision3 500T (5219/7219)",
+      "iso": 500,
+      "default_profile": "kodak-vision3-500t",
+      "aliases": [
+        "Vision3 500T",
+        "Kodak 5219",
+        "5219"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak H-1-5219t, November 2007), not a scanner calibration. ECN-2 curves, tungsten-balanced; C-41-processed Vision3 has different contrast."
+    },
+    {
+      "id": "kodak-vision3-200t",
+      "name": "Kodak Vision3 200T (5213/7213)",
+      "iso": 200,
+      "default_profile": "kodak-vision3-200t",
+      "aliases": [
+        "Vision3 200T",
+        "Kodak 5213",
+        "5213"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak H-1-5213t, May 2010), not a scanner calibration. ECN-2 curves, tungsten-balanced; C-41-processed Vision3 has different contrast."
+    },
+    {
+      "id": "cinestill-800t",
+      "name": "CineStill 800T",
+      "iso": 800,
+      "default_profile": "kodak-vision3-500t",
+      "aliases": [
+        "Cinestill 800T",
+        "CineStill 800 Tungsten"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Kodak H-1-5219t, November 2007), not a scanner calibration. CineStill 800T is Vision3 500T with the remjet backing removed, usually processed C-41; these are Kodak's ECN-2 curves for 500T, an approximation."
+    },
+    {
+      "id": "fuji-pro160s",
+      "name": "Fujicolor Pro 160S",
+      "iso": 160,
+      "default_profile": "fuji-pro160s",
+      "aliases": [
+        "Fuji Pro 160S",
+        "Pro 160S",
+        "Fujicolor Pro 160NS"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration."
+    },
+    {
+      "id": "fuji-pro160c",
+      "name": "Fujicolor Pro 160C",
+      "iso": 160,
+      "default_profile": "fuji-pro160c",
+      "aliases": [
+        "Fuji Pro 160C",
+        "Pro 160C"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration."
+    },
+    {
+      "id": "fuji-npl160",
+      "name": "Fujicolor NPL 160 Professional",
+      "iso": 160,
+      "default_profile": "fuji-npl160",
+      "aliases": [
+        "Fuji NPL 160",
+        "NPL 160"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration. Tungsten-balanced."
+    },
+    {
+      "id": "fuji-pro800z",
+      "name": "Fujicolor Pro 800Z",
+      "iso": 800,
+      "default_profile": "fuji-pro800z",
+      "aliases": [
+        "Fuji Pro 800Z",
+        "Pro 800Z"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration."
+    },
+    {
+      "id": "fuji-pro400h",
+      "name": "Fujicolor Pro 400H",
+      "iso": 400,
+      "default_profile": "fuji-pro400h",
+      "aliases": [
+        "Fuji Pro 400H",
+        "Pro 400H",
+        "Fujicolor 400H"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm Japan PRO 400H data sheet (2024 upload)), not a scanner calibration."
+    },
+    {
+      "id": "fuji-superia1600",
+      "name": "Fujicolor Superia 1600 [CU]",
+      "iso": 1600,
+      "default_profile": "fuji-superia1600",
+      "aliases": [
+        "Fuji Superia 1600",
+        "Superia 1600"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm AF3-145E, print code EIGI-03.2-HB), not a scanner calibration."
+    },
+    {
+      "id": "fuji-truedef400",
+      "name": "Fujicolor True Definition 400 [CH]",
+      "iso": 400,
+      "default_profile": "fuji-truedef400",
+      "aliases": [
+        "Fuji True Definition 400",
+        "True Definition 400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm AF3-196E, print code EIGI-05.01-FG), not a scanner calibration."
+    },
+    {
+      "id": "fuji-nexia200",
+      "name": "Fujicolor nexia A200 [DA] (APS)",
+      "iso": 200,
+      "default_profile": "fuji-nexia200",
+      "aliases": [
+        "Fuji Nexia 200",
+        "Nexia A200",
+        "Fujicolor Nexia 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration."
+    },
+    {
+      "id": "fuji-nexia400",
+      "name": "Fujicolor nexia 400 [DH] (APS)",
+      "iso": 400,
+      "default_profile": "fuji-nexia400",
+      "aliases": [
+        "Fuji Nexia 400",
+        "Nexia 400",
+        "Fujicolor Nexia 400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration."
+    },
+    {
+      "id": "fuji-nexia800",
+      "name": "Fujicolor nexia 800 [DZ] (APS)",
+      "iso": 800,
+      "default_profile": "fuji-nexia800",
+      "aliases": [
+        "Fuji Nexia 800",
+        "Nexia 800",
+        "Fujicolor Nexia 800"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration."
+    },
+    {
+      "id": "fuji-c200",
+      "name": "Fujicolor C200",
+      "iso": 200,
+      "default_profile": "fuji-c200",
+      "aliases": [
+        "Fuji C200",
+        "Fujicolor C 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Fujifilm AF3-0249E (2019 upload)), not a scanner calibration. Curves traced from a scanned chart."
+    },
+    {
+      "id": "konica-vxsuper100",
+      "name": "Konica Color VX Super 100",
+      "iso": 100,
+      "default_profile": "konica-vxsuper100",
+      "aliases": [
+        "Konica VX Super 100",
+        "VX Super 100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Konica Color VX Super 100 technical data (undated)), not a scanner calibration."
+    },
+    {
+      "id": "konica-vxsuper200",
+      "name": "Konica Color VX Super 200",
+      "iso": 200,
+      "default_profile": "konica-vxsuper200",
+      "aliases": [
+        "Konica VX Super 200",
+        "VX Super 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Konica Color VX Super 200 technical data (undated)), not a scanner calibration."
+    },
+    {
+      "id": "konica-vxsuper400",
+      "name": "Konica Color VX Super 400",
+      "iso": 400,
+      "default_profile": "konica-vxsuper400",
+      "aliases": [
+        "Konica VX Super 400",
+        "VX Super 400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Konica Color VX Super 400 technical data (undated)), not a scanner calibration."
+    },
+    {
+      "id": "konica-centuria800",
+      "name": "Konica Color Centuria Super 800",
+      "iso": 800,
+      "default_profile": "konica-centuria800",
+      "aliases": [
+        "Konica Centuria 800",
+        "Centuria Super 800",
+        "Centuria 800"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Konica Color Centuria Super 800 technical data (2002)), not a scanner calibration."
+    },
+    {
+      "id": "konica-centuria1600",
+      "name": "Konica Color Centuria Super 1600",
+      "iso": 1600,
+      "default_profile": "konica-centuria1600",
+      "aliases": [
+        "Konica Centuria 1600",
+        "Centuria Super 1600",
+        "Centuria 1600"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Konica Color Centuria Super 1600 technical data (2002)), not a scanner calibration."
+    },
+    {
+      "id": "agfa-portrait160",
+      "name": "Agfacolor Portrait 160",
+      "iso": 160,
+      "default_profile": "agfa-portrait160",
+      "aliases": [
+        "Agfa Portrait 160"
+      ],
+      "candidate_profiles": [
+        "agfa-portraitxps160"
+      ],
+      "identity_note": "Uses manufacturer characteristic curves (Agfa professional colour negative film data sheet F-PF-E4), not a scanner calibration."
+    },
+    {
+      "id": "agfa-portraitxps160",
+      "name": "Agfacolor Portrait XPS 160",
+      "iso": 160,
+      "default_profile": "agfa-portraitxps160",
+      "aliases": [
+        "Agfa Portrait XPS 160",
+        "Portrait XPS 160"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Agfa professional films technical data (Optima II, Portrait XPS, Ultra)), not a scanner calibration."
+    },
+    {
+      "id": "agfa-optima100",
+      "name": "Agfacolor Optima 100",
+      "iso": 100,
+      "default_profile": "agfa-optima100",
+      "aliases": [
+        "Agfa Optima 100"
+      ],
+      "candidate_profiles": [
+        "agfa-optima2-100"
+      ],
+      "identity_note": "Uses manufacturer characteristic curves (Agfa professional colour negative film data sheet F-PF-E4), not a scanner calibration."
+    },
+    {
+      "id": "agfa-optima200",
+      "name": "Agfacolor Optima 200",
+      "iso": 200,
+      "default_profile": "agfa-optima200",
+      "aliases": [
+        "Agfa Optima 200"
+      ],
+      "candidate_profiles": [
+        "agfa-optima2-200"
+      ],
+      "identity_note": "Uses manufacturer characteristic curves (Agfa professional colour negative film data sheet F-PF-E4), not a scanner calibration."
+    },
+    {
+      "id": "agfa-optima400",
+      "name": "Agfacolor Optima 400",
+      "iso": 400,
+      "default_profile": "agfa-optima400",
+      "aliases": [
+        "Agfa Optima 400"
+      ],
+      "candidate_profiles": [
+        "agfa-optima2-400"
+      ],
+      "identity_note": "Uses manufacturer characteristic curves (Agfa professional colour negative film data sheet F-PF-E4), not a scanner calibration."
+    },
+    {
+      "id": "agfa-optima2-100",
+      "name": "Agfacolor Optima II 100",
+      "iso": 100,
+      "default_profile": "agfa-optima2-100",
+      "aliases": [
+        "Agfa Optima II 100",
+        "Optima II 100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Agfa professional films technical data (Optima II, Portrait XPS, Ultra)), not a scanner calibration."
+    },
+    {
+      "id": "agfa-optima2-200",
+      "name": "Agfacolor Optima II 200",
+      "iso": 200,
+      "default_profile": "agfa-optima2-200",
+      "aliases": [
+        "Agfa Optima II 200",
+        "Optima II 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Agfa professional films technical data (Optima II, Portrait XPS, Ultra)), not a scanner calibration."
+    },
+    {
+      "id": "agfa-optima2-400",
+      "name": "Agfacolor Optima II 400",
+      "iso": 400,
+      "default_profile": "agfa-optima2-400",
+      "aliases": [
+        "Agfa Optima II 400",
+        "Optima II 400"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Agfa professional films technical data (Optima II, Portrait XPS, Ultra)), not a scanner calibration."
+    },
+    {
+      "id": "agfa-ultra50",
+      "name": "Agfacolor Ultra 50",
+      "iso": 50,
+      "default_profile": "agfa-ultra50",
+      "aliases": [
+        "Agfa Ultra 50",
+        "Agfa Ultra 50 Professional"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Uses manufacturer characteristic curves (Agfa professional films technical data (Optima II, Portrait XPS, Ultra)), not a scanner calibration."
+    },
+    {
+      "id": "unknown-slide",
+      "name": "Unknown slide (reversal) film",
+      "iso": null,
+      "film": "slide",
+      "default_profile": "generic",
+      "aliases": [
+        "unknown slide",
+        "slide"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film of unknown stock: plain stretch between the measured endpoints, no curve-based correction."
+    },
+    {
+      "id": "kodak-kodachrome25",
+      "name": "Kodachrome 25",
+      "iso": 25,
+      "film": "slide",
+      "default_profile": "kodak-kodachrome25",
+      "aliases": [
+        "Kodachrome 25",
+        "KM",
+        "PKM",
+        "Kodachrome 25 Professional"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-55, June 2009), not a scanner calibration. Kodachrome dyes differ from E-6 films; scanners tuned for E-6 often read it bluish, which these curves do not correct. A Kodachrome IT8 target is the fix for that."
+    },
+    {
+      "id": "kodak-kodachrome64",
+      "name": "Kodachrome 64",
+      "iso": 64,
+      "film": "slide",
+      "default_profile": "kodak-kodachrome64",
+      "aliases": [
+        "Kodachrome 64",
+        "KR",
+        "PKR",
+        "Kodachrome 64 Professional"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-55, June 2009), not a scanner calibration. Kodachrome dyes differ from E-6 films; scanners tuned for E-6 often read it bluish, which these curves do not correct. A Kodachrome IT8 target is the fix for that."
+    },
+    {
+      "id": "kodak-kodachrome200",
+      "name": "Kodachrome 200",
+      "iso": 200,
+      "film": "slide",
+      "default_profile": "kodak-kodachrome200",
+      "aliases": [
+        "Kodachrome 200",
+        "KL",
+        "PKL",
+        "Kodachrome 200 Professional"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-55, June 2009), not a scanner calibration. Kodachrome dyes differ from E-6 films; scanners tuned for E-6 often read it bluish, which these curves do not correct. A Kodachrome IT8 target is the fix for that."
+    },
+    {
+      "id": "kodak-ektachrome-epp",
+      "name": "Kodak Ektachrome 100 Plus Professional (EPP)",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-epp",
+      "aliases": [
+        "Ektachrome 100 Plus",
+        "EPP"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-113, July 2007), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ektachrome-epn",
+      "name": "Kodak Ektachrome 100 Professional (EPN)",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-epn",
+      "aliases": [
+        "Ektachrome 100",
+        "EPN"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-27, July 2007), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ektachrome-e200",
+      "name": "Kodak Ektachrome E200 Professional",
+      "iso": 200,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-e200",
+      "aliases": [
+        "Ektachrome E200",
+        "E200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-28, September 2005), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ektachrome-epy64t",
+      "name": "Kodak Ektachrome 64T Professional (EPY)",
+      "iso": 64,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-epy64t",
+      "aliases": [
+        "Ektachrome 64T",
+        "EPY"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-130, July 2007), not a scanner calibration. Tungsten-balanced."
+    },
+    {
+      "id": "kodak-ektachrome-ept160t",
+      "name": "Kodak Ektachrome 160T Professional (EPT)",
+      "iso": 160,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-ept160t",
+      "aliases": [
+        "Ektachrome 160T",
+        "EPT"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-144, May 2007), not a scanner calibration. Tungsten-balanced."
+    },
+    {
+      "id": "kodak-ektachrome-epj320t",
+      "name": "Kodak Ektachrome 320T Professional (EPJ)",
+      "iso": 320,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-epj320t",
+      "aliases": [
+        "Ektachrome 320T",
+        "EPJ"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-145, May 2007), not a scanner calibration. Tungsten-balanced."
+    },
+    {
+      "id": "kodak-ektachrome-p1600",
+      "name": "Kodak Ektachrome P1600 Professional (EPH)",
+      "iso": 1600,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-p1600",
+      "aliases": [
+        "Ektachrome P1600",
+        "EPH"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-147, May 2007), not a scanner calibration. Curves are for E-6P push-2 processing."
+    },
+    {
+      "id": "kodak-ektachrome-400x",
+      "name": "Kodak Ektachrome 400X Professional (EPL)",
+      "iso": 400,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-400x",
+      "aliases": [
+        "Ektachrome 400X",
+        "EPL"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-161, September 2005), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ektachrome-e100vs",
+      "name": "Kodak Ektachrome E100VS Professional",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-e100vs",
+      "aliases": [
+        "Ektachrome E100VS",
+        "E100VS"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-163, September 2005), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ektachrome-e100g",
+      "name": "Kodak Ektachrome E100G Professional",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-e100g",
+      "aliases": [
+        "Ektachrome E100G",
+        "E100G"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-4024, September 2009), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ektachrome-e100gx",
+      "name": "Kodak Ektachrome E100GX Professional",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-e100gx",
+      "aliases": [
+        "Ektachrome E100GX",
+        "E100GX"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-4024, September 2009), not a scanner calibration."
+    },
+    {
+      "id": "kodak-ektachrome-epr64",
+      "name": "Kodak Ektachrome 64 Professional (EPR)",
+      "iso": 64,
+      "film": "slide",
+      "default_profile": "kodak-ektachrome-epr64",
+      "aliases": [
+        "Ektachrome 64",
+        "EPR"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-8, September 2005), not a scanner calibration."
+    },
+    {
+      "id": "kodak-elitechrome100",
+      "name": "Kodak Elite Chrome 100",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "kodak-elitechrome100",
+      "aliases": [
+        "Elite Chrome 100",
+        "Elitechrome 100",
+        "EB"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-7014E, April 2005), not a scanner calibration."
+    },
+    {
+      "id": "kodak-elitechrome100ec",
+      "name": "Kodak Elite Chrome Extra Color 100",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "kodak-elitechrome100ec",
+      "aliases": [
+        "Elite Chrome Extra Color 100",
+        "Elitechrome EC 100",
+        "EBX"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-126E, April 2005), not a scanner calibration."
+    },
+    {
+      "id": "kodak-elitechrome200",
+      "name": "Kodak Elite Chrome 200",
+      "iso": 200,
+      "film": "slide",
+      "default_profile": "kodak-elitechrome200",
+      "aliases": [
+        "Elite Chrome 200",
+        "Elitechrome 200",
+        "ED"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-148E, April 2005), not a scanner calibration."
+    },
+    {
+      "id": "kodak-elitechrome400",
+      "name": "Kodak Elite Chrome 400",
+      "iso": 400,
+      "film": "slide",
+      "default_profile": "kodak-elitechrome400",
+      "aliases": [
+        "Elite Chrome 400",
+        "Elitechrome 400",
+        "EL"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Kodak E-149, January 1998), not a scanner calibration."
+    },
+    {
+      "id": "fuji-provia400f",
+      "name": "Fujichrome Provia 400F [RHPIII]",
+      "iso": 400,
+      "film": "slide",
+      "default_profile": "fuji-provia400f",
+      "aliases": [
+        "Provia 400F",
+        "RHP III",
+        "Fuji Provia 400F"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Fujifilm AF3-066E, print code EIGI-03.1-HB), not a scanner calibration."
+    },
+    {
+      "id": "fuji-provia400x",
+      "name": "Fujichrome Provia 400X [RXP]",
+      "iso": 400,
+      "film": "slide",
+      "default_profile": "fuji-provia400x",
+      "aliases": [
+        "Provia 400X",
+        "RXP",
+        "Fuji Provia 400X"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Fujifilm AF3-0213E), not a scanner calibration."
+    },
+    {
+      "id": "fuji-astia100f",
+      "name": "Fujichrome Astia 100F [RAP100F]",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "fuji-astia100f",
+      "aliases": [
+        "Astia 100F",
+        "Fuji Astia 100F"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Fujifilm AF3-149E, print code EIGI-03.11-HB), not a scanner calibration."
+    },
+    {
+      "id": "fuji-t64",
+      "name": "Fujichrome T64 [RTP]",
+      "iso": 64,
+      "film": "slide",
+      "default_profile": "fuji-t64",
+      "aliases": [
+        "Fuji T64",
+        "Fujichrome 64T",
+        "RTP"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Fujifilm AF3-178E), not a scanner calibration. Tungsten-balanced."
+    },
+    {
+      "id": "fuji-velvia100f",
+      "name": "Fujichrome Velvia 100F [RVP100F]",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "fuji-velvia100f",
+      "aliases": [
+        "Velvia 100F",
+        "Fuji Velvia 100F"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Fujifilm AF3-148E, print code EIGI-03.5-HB), not a scanner calibration. Fujifilm stops drawing green and blue where they merge with red; those traces continue along red."
+    },
+    {
+      "id": "fuji-velvia50",
+      "name": "Fujichrome Velvia 50 [RVP]",
+      "iso": 50,
+      "film": "slide",
+      "default_profile": "fuji-velvia50",
+      "aliases": [
+        "Velvia 50",
+        "Fuji Velvia",
+        "RVP"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration."
+    },
+    {
+      "id": "fuji-velvia100",
+      "name": "Fujichrome Velvia 100 [RVP100]",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "fuji-velvia100",
+      "aliases": [
+        "Velvia 100",
+        "Fuji Velvia 100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration."
+    },
+    {
+      "id": "fuji-sensia200",
+      "name": "Fujichrome Sensia 200 [RM]",
+      "iso": 200,
+      "film": "slide",
+      "default_profile": "fuji-sensia200",
+      "aliases": [
+        "Sensia 200",
+        "Fuji Sensia 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Fujifilm Professional Film Data Guide (AF3-207U)), not a scanner calibration."
+    },
+    {
+      "id": "konica-chrome-r100",
+      "name": "Konica Chrome R-100",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "konica-chrome-r100",
+      "aliases": [
+        "Konica Chrome 100",
+        "Konica R-100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Konica Chrome R-100 technical data (undated)), not a scanner calibration."
+    },
+    {
+      "id": "agfa-rsx2-50",
+      "name": "Agfachrome RSX II 50",
+      "iso": 50,
+      "film": "slide",
+      "default_profile": "agfa-rsx2-50",
+      "aliases": [
+        "Agfa RSX II 50",
+        "RSX 50"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Agfa professional colour negative film data sheet F-PF-E4), not a scanner calibration."
+    },
+    {
+      "id": "agfa-rsx2-100",
+      "name": "Agfachrome RSX II 100",
+      "iso": 100,
+      "film": "slide",
+      "default_profile": "agfa-rsx2-100",
+      "aliases": [
+        "Agfa RSX II 100",
+        "RSX 100"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Agfa professional colour negative film data sheet F-PF-E4), not a scanner calibration."
+    },
+    {
+      "id": "agfa-rsx2-200",
+      "name": "Agfachrome RSX II 200",
+      "iso": 200,
+      "film": "slide",
+      "default_profile": "agfa-rsx2-200",
+      "aliases": [
+        "Agfa RSX II 200",
+        "RSX 200"
+      ],
+      "candidate_profiles": [],
+      "identity_note": "Slide film. Uses manufacturer characteristic curves (Agfa professional colour negative film data sheet F-PF-E4), not a scanner calibration."
+    }
+  ],
+  "research": "FILM-STOCK-RESEARCH.md"
+}

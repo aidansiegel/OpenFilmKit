@@ -1,0 +1,20 @@
+{
+ "id": "genesys/plustek-opticfilm-8200i",
+ "name": "Plustek OpticFilm 8200i (GL845)",
+ "kind": "film",
+ "capture": {
+  "source": "Transparency Adapter",
+  "mode": "Color",
+  "depth": 16,
+  "dpi": [900, 1800, 3600, 7200],
+  "default_dpi": 7200
+ },
+ "frame_mm": {"width": 36.58, "height": 25.0, "min_width": 34.0, "min_height": 23.0},
+ "infrared": true,
+ "requires_patches": [],
+ "hardware_record": [],
+ "notes": [
+  "SANE status: complete, including infrared. Not yet tried with this kit.",
+  "Same holder and frame as the SE; different chip and driver code."
+ ]
+}
