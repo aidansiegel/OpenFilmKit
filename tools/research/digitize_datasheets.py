@@ -38,7 +38,7 @@ def listed_groups(page,s):
     return sorted(groups,key=lambda g:g[-1][-1][1])
 
 def style(d):
-    """Colour and dash shape of a stroked path: how a legend tells otherwise identical curves apart."""
+    """Color and dash shape of a stroked path: how a legend tells otherwise identical curves apart."""
     dashes=re.findall(r'[\d.]+',(d.get('dashes') or '').split(']')[0])
     return tuple(round(v,1) for v in d['color'])+(len(dashes),)
 
@@ -85,7 +85,7 @@ def located_groups(page,s):
     if s.get('film')=='slide':return [groups[i] for i in slide_order(page,s,xy,lo,hi,styles)]
     heights=np.array([[np.interp(x,a[:,0],a[:,1]) for x in np.linspace(lo,hi,7)] for a in xy])
     order=np.argsort(heights[:,3])
-    # Colour negative masks keep blue density above green above red across the whole plot.
+    # Color negative masks keep blue density above green above red across the whole plot.
     if not (np.diff(heights[order],axis=0)>0).all():raise ValueError(s['id']+': traces cross; channel order is ambiguous')
     labels=sorted((w[1],w[4][0]) for w in page.get_text('words') if x0<w[0]<x1 and y0<w[1]<y1 and re.fullmatch(r'B|G|R|Blue|Green|Red',w[4]))
     if len(labels)>=2 and [c for _,c in labels]!=[c for c in 'BGR' if c in {c for _,c in labels}]:raise ValueError(s['id']+': printed B/G/R labels disagree with trace order')
@@ -128,9 +128,9 @@ def runs(column,gap=1):
     return out
 
 def grid_lines(ink,axis,count,k=1):
-    """Centres of an evenly spaced grid of `count` lines in a scanned chart.
+    """Centers of an evenly spaced grid of `count` lines in a scanned chart.
 
-    The spacing whose lines carry the most ink is found first; each line is then placed at the median centre of
+    The spacing whose lines carry the most ink is found first; each line is then placed at the median center of
     the thin runs crossing it, since curves passing through a grid line skew a plain coverage peak. `k` scales the
     pixel sizes for scans at other resolutions."""
     w=int(round(4*k));m=int(round(6*k))
@@ -143,20 +143,20 @@ def grid_lines(ink,axis,count,k=1):
             if best is None or sum(band[pos])>best[0]:best=(sum(band[pos]),pos)
     lines=ink.T if axis==1 else ink;out=[]
     for q in best[1]:
-        centres=[max(q-m,0)+(s+e)/2 for row in lines[:,max(q-m,0):q+m+1] for s,e in runs(row) if e-s<=2*k]
-        out.append(float(np.median(centres)) if centres else float(q))
+        centers=[max(q-m,0)+(s+e)/2 for row in lines[:,max(q-m,0):q+m+1] for s,e in runs(row) if e-s<=2*k]
+        out.append(float(np.median(centers)) if centers else float(q))
     return out
 
 def scanned_points(page,s):
     """Follow the three curves of a scanned chart outwards from a column where all three are clear.
 
     A column is skipped at a vertical grid line, or where a thick blob (lettering over the curve) covers the
-    predicted point. The search window never widens, so a trace cannot wander onto a label or a neighbour.
+    predicted point. The search window never widens, so a trace cannot wander onto a label or a neighbor.
     Pixel sizes suit a ~4 px/pt scan; `scale` in the spec multiplies them for finer or coarser ones."""
     k=s.get('scale',1);line,tol,span,end_gap=7*k,2.5*k,20*k,40*k
     info=page.get_images(full=True)[s['image']];pix=pymupdf.Pixmap(page.parent,info[0]);box=page.get_image_bbox(info)
     v=np.frombuffer(pix.samples,np.uint8).reshape(pix.height,pix.width,pix.n)[...,0].astype(int);bg=np.median(v)
-    # Lines are whatever differs strongly from the background: dark on white or grey, light on black.
+    # Lines are whatever differs strongly from the background: dark on white or gray, light on black.
     ink=v<bg-64 if bg>=96 else v>bg+64
     v=grid_lines(ink,0,s['grid'][0],k);h=grid_lines(ink,1,s['grid'][1],k)
     x_lo,x_hi,y_lo,y_hi=int(v[0]+3*k),int(v[-1]-2*k),int(h[0]+3*k),int(h[-1]-2*k)
@@ -254,7 +254,7 @@ def fit_axis(labels,ticks,barred=False):
     if barred and zero is not None:labels=[(c,-abs(v) if i<zero else v) for i,(c,v) in enumerate(labels)]
     pos=np.array([min(ticks,key=lambda t:abs(t-c)) if ticks and min(abs(t-c) for t in ticks)<4 else c for c,_ in labels]);val=np.array([v for _,v in labels])
     slope,offset=np.polyfit(pos,val,1)
-    # Label centres drift (split minus signs, outlined digits). Name each tick or grid line from that rough fit,
+    # Label centers drift (split minus signs, outlined digits). Name each tick or grid line from that rough fit,
     # to the nearest half unit, and refit through those exact positions instead.
     named=[(t,round((slope*t+offset)*2)/2) for t in ticks];named=[(t,v) for t,v in named if abs(slope*t+offset-v)<.06]  # tight enough to skip minor ticks
     if len({v for _,v in named})>=3:
@@ -308,10 +308,10 @@ def check(outdir):
         x0,y0,x1,y1=doc['digitization']['figure_rect'];(e0,e1),(d0,d1)=doc['digitization']['axes']['log_exposure'],doc['digitization']['axes']['density']
         for v in np.arange(np.ceil(e0),e1+1e-9):x=x0+(v-e0)/(e1-e0)*(x1-x0);page.draw_line((x,y0),(x,y1+6),color=(1,0,1),width=.4,dashes='[1 1] 0')
         for v in np.arange(np.ceil(d0*2)/2,d1+1e-9,.5):y=y1-(v-d0)/(d1-d0)*(y1-y0);page.draw_line((x0-6,y),(x1,y),color=(1,0,1),width=.4,dashes='[1 1] 0')
-        for channel,colour in zip(CHANNELS,[(0,0,1),(0,.6,0),(1,0,0)]):
+        for channel,color in zip(CHANNELS,[(0,0,1),(0,.6,0),(1,0,0)]):
             t=doc['physical_traces'][channel];L,D=np.array(t['log_exposure']),np.array(t.get('status_m_density',t.get('density')))
             x=x0+(L-e0)/(e1-e0)*(x1-x0);y=y1-(D-d0)/(d1-d0)*(y1-y0)
-            page.draw_polyline(list(zip(x,y)),color=colour,width=.8)
+            page.draw_polyline(list(zip(x,y)),color=color,width=.8)
         page.draw_rect(pymupdf.Rect(x0,y0,x1,y1),color=(1,.5,0),width=.6)
         page.get_pixmap(dpi=150,clip=pymupdf.Rect(x0-40,y0-12,x1+12,y1+24)).save(outdir/(s['id']+'.png'))
     print('Overlays in',outdir)

@@ -9,13 +9,13 @@ Prints fade and labs made their own corrections: judge the pattern across many f
 
 pairs.json lists {"negative": RGB16 TIFF, "print": print scan, "stock"?: id, "roll"?: roll folder, "crop"?: [l,t,r,b],
 "label"?: text}. Each conversion is registered to its print (SIFT features, RANSAC homography, mirror tried),
-then compared where both are valid. Lightness is matched first, so the scores are about colour:
+then compared where both are valid. Lightness is matched first, so the scores are about color:
 
   dE      mean CIEDE2000 difference from the print
-  dE_bal  the same after one overall colour balance (a gain per channel). What remains is colour that changes
+  dE_bal  the same after one overall color balance (a gain per channel). What remains is color that changes
           with brightness: what a film profile is meant to fix and a white-balance tweak cannot.
-  grey    mean chroma of the conversion where the print is neutral, after that balance. Lower is better.
-  dL      mean lightness difference after a single exposure match: tone, which the colour scores leave out.
+  gray    mean chroma of the conversion where the print is neutral, after that balance. Lower is better.
+  dL      mean lightness difference after a single exposure match: tone, which the color scores leave out.
 
 Needs OpenCV and scikit-image, which the kit itself does not. Ported from the author's earlier film-scan tool.
 """
@@ -62,7 +62,7 @@ def encode(lin):
     lin=np.clip(lin,0,1);return np.where(lin<=.0031308,12.92*lin,1.055*lin**(1/2.4)-.055)
 
 def score(conversion,target,valid):
-    """Colour agreement of a conversion with the registered print over `valid` pixels (see module notes)."""
+    """Color agreement of a conversion with the registered print over `valid` pixels (see module notes)."""
     c,t=conversion[valid].astype(float)/255,target[valid].astype(float)/255;cl,tl=linear(c),linear(t)
     # Balance: one gain per channel, fitted on mid-tones where neither image is clipped.
     mid=(c.min(1)>.08)&(c.max(1)<.92)&(t.min(1)>.08)&(t.max(1)<.92)
@@ -71,12 +71,12 @@ def score(conversion,target,valid):
     out={'dL':round(float(np.abs(rgb2lab(encode(cl*exposure)[None])[0][:,0]-rgb2lab(t[None])[0][:,0]).mean()),3)}
     for name,rgb in (('dE',c),('dE_bal',encode(cl*gains))):
         lab=rgb2lab(rgb[None])[0];ref=rgb2lab(t[None])[0]
-        # Match lightness with a quantile map, so contrast and exposure differences do not count as colour.
+        # Match lightness with a quantile map, so contrast and exposure differences do not count as color.
         q=np.linspace(0,100,257);lab[:,0]=np.interp(lab[:,0],np.percentile(lab[:,0],q),np.percentile(ref[:,0],q))
         out[name]=round(float(deltaE_ciede2000(lab,ref).mean()),3)
         if name=='dE_bal':
             neutral=(np.hypot(ref[:,1],ref[:,2])<6)&(ref[:,0]>15)&(ref[:,0]<92)
-            out['grey']=round(float(np.hypot(lab[neutral,1],lab[neutral,2]).mean()),3) if neutral.sum()>200 else None
+            out['gray']=round(float(np.hypot(lab[neutral,1],lab[neutral,2]).mean()),3) if neutral.sum()>200 else None
     out['balance_gains']=[round(float(g),3) for g in gains];return out
 
 def variants(chosen,root,extra):
@@ -127,13 +127,13 @@ def sheet(path,target,valid,images,height=360):
 
 def summarize(results):
     ok=[r for r in results if 'scores' in r];names=sorted({n for r in ok for n in r['scores']},key=lambda n:(n!='generic',n))
-    lines=[f'{len(ok)} of {len(results)} pairs scored. Medians; "beats generic" counts frames where the profile is lower.','',f"{'conversion':32s} {'frames':>6s} {'dE':>6s} {'dE_bal':>7s} {'grey':>6s} {'dL':>6s} {'beats generic (dE_bal, grey, dL)':>34s}"]
+    lines=[f'{len(ok)} of {len(results)} pairs scored. Medians; "beats generic" counts frames where the profile is lower.','',f"{'conversion':32s} {'frames':>6s} {'dE':>6s} {'dE_bal':>7s} {'gray':>6s} {'dL':>6s} {'beats generic (dE_bal, gray, dL)':>34s}"]
     for n in names:
         rows=[r for r in ok if n in r['scores']];med=lambda k:np.median([r['scores'][n][k] for r in rows if r['scores'][n][k] is not None] or [np.nan])
         both=[r for r in rows if 'generic' in r['scores']]
         beat=lambda k:sum(r['scores'][n][k] is not None and r['scores']['generic'][k] is not None and r['scores'][n][k]<r['scores']['generic'][k] for r in both)
-        wins='' if n=='generic' else f"{beat('dE_bal')}/{len(both)}, {beat('grey')}/{len(both)}, {beat('dL')}/{len(both)}"
-        lines.append(f"{n:32s} {len(rows):6d} {med('dE'):6.2f} {med('dE_bal'):7.2f} {med('grey'):6.2f} {med('dL'):6.2f} {wins:>34s}")
+        wins='' if n=='generic' else f"{beat('dE_bal')}/{len(both)}, {beat('gray')}/{len(both)}, {beat('dL')}/{len(both)}"
+        lines.append(f"{n:32s} {len(rows):6d} {med('dE'):6.2f} {med('dE_bal'):7.2f} {med('gray'):6.2f} {med('dL'):6.2f} {wins:>34s}")
     failed=[r for r in results if 'error' in r]
     if failed:lines+=['','Not scored:']+[f"  {r['label']}: {r['error']}" for r in failed]
     return '\n'.join(lines)+'\n'
@@ -154,7 +154,7 @@ def build_pairs(args):
         for r in (json.loads(plan.read_text()) or {}).get('rescans',[]):
             name=r['original']['name'];neg=[p for p in negatives.get(name,[]) if os.path.getsize(p)==r['original']['bytes']]
             if args.verify:neg=[p for p in neg if sha(p)==r['original']['sha256']]
-            # Prefer the original print scan: the cleaned print may also have had faded colour restored.
+            # Prefer the original print scan: the cleaned print may also have had faded color restored.
             original=next((f for f in r.get('original_files',[]) if f.endswith('-oriented.jpg')),None)
             pr=[(p,'original print scan') for p in prints.get(original,[])] if original else []
             pr=pr or [(p,'cleaned print') for p in prints.get(r['print_file'],[]) if not args.verify or sha(p)==r['print_sha256']]

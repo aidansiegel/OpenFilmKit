@@ -3,7 +3,7 @@
 In each eye (InsightFace landmark), the pupil's flash-red pixels are found as strongly red relative
 to green and blue (skin is reddish too, but far less saturated), kept only as the blob at the
 pupil, and turned dark neutral (the green-blue level on all three channels). White catchlights,
-iris colour and golden flash glow are not red, so they are untouched;
+iris color and golden flash glow are not red, so they are untouched;
 the edge is weighted by how red each pixel is, so there is no hard rim.
 """
 import cv2
@@ -17,7 +17,7 @@ def redness(rgb):
 
 
 def pupil_weight(img, ex, ey, fw, lift=0.3, min_red=45):
-    """Soft weight (0..1) over the red pupil around eye centre (ex, ey) for a face fw wide, as
+    """Soft weight (0..1) over the red pupil around eye center (ex, ey) for a face fw wide, as
     (y0, x0, weight); None when the eye has no red pupil. Red is judged against this eye's own
     surroundings (skin and the white of the eye), because a warm photo makes all skin redder,
     and only within a small disc at the landmark, so nothing outside the pupil is touched."""

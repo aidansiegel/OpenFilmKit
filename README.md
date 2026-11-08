@@ -37,7 +37,13 @@ recipe beside it that says exactly how it was made.
 - `scan --full-area` scans the driver's whole area instead of its default selection.
 - `convert` picks the film's response curve from `openfilmkit stocks` / `openfilmkit profiles`
   (142 profiles digitized from manufacturers' data sheets).
-- `clean --no-dust` trims holder edges only; run `clean` again later for dust.
+- `clean` removes dust and fibers and trims film-holder edges, always on a new copy. Faces and the
+  camera's date stamp are left untouched by dust removal. Options:
+  - `--no-dust` trims holder edges only; run `clean` again later for dust.
+  - `--no-crop` keeps the holder edges; `--no-faces` skips face detection.
+  - `--color` also corrects levels and color cast; `--straighten DEGREES`, `--lift-shadows GAMMA`
+    and `--red-eye` do what they say.
+  - On a roll folder, it cleans only conversions without a copy made with the same options.
 
 ## Scans from SilverFast or VueScan
 

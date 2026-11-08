@@ -23,5 +23,16 @@ class ClosedPipe(unittest.TestCase):
         self.assertEqual(proc.stderr, '')
 
 
+
+class Options(unittest.TestCase):
+    def test_color_has_a_hidden_british_alias(self):
+        sys.path.insert(0, str(ROOT))
+        from openfilmkit import cli
+        for flag in ('--color', '--colour'):
+            self.assertTrue(cli.parser().parse_args(['clean', 'x.jpg', flag]).color, flag)
+        clean = cli.parser()._subparsers._group_actions[0].choices['clean']
+        self.assertIn('--color', clean.format_help())
+        self.assertNotIn('--colour', clean.format_help())
+
 if __name__ == '__main__':
     unittest.main()

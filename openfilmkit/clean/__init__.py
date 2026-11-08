@@ -1,7 +1,7 @@
-"""Clean-up of converted viewing copies: dust, holder crop, optional colour, straightening, red eye.
+"""Clean-up of converted viewing copies: dust, holder crop, optional color, straightening, red eye.
 
 Order follows the archive pipeline this came from (clean_batch.py first_pass): protect the date
-stamp and faces, remove dust from the original, optionally fix colour, then crop. Manual
+stamp and faces, remove dust from the original, optionally fix color, then crop. Manual
 adjustments and red eye come after. Nothing is invented: dust is filled only from its immediate
 surroundings (OpenCV inpainting), and there is no generative fill.
 
@@ -26,6 +26,8 @@ from . import redeye, restore
 
 Image.MAX_IMAGE_PIXELS = None
 DETECT_SIDE = 1200
+# Recorded in each recipe, so a cleaned copy says what decided which faces were spared.
+FACE_DETECTOR = "OpenCV Haar cascades (frontal face, eyes), on a copy 1200 px on its long side"
 
 
 class CleanError(Exception):
@@ -89,7 +91,7 @@ def default_output(source):
     return source.with_name(f'{source.stem}-clean-v{n}{source.suffix}')
 
 
-def clean(source, output=None, crop=True, dust=True, protect_faces=True, colour=False,
+def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=False,
           straighten=None, lift_shadows=None, red_eye=False):
     """Clean `source` into a new file with a recipe beside it (<output>.json). Returns the recipe."""
     source = Path(source).expanduser().resolve()
@@ -118,12 +120,13 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, colour=
         cleaned = restore.remove_dust(img, mask)
         steps.append({'step': 'dust', 'pixels_filled': int(mask.sum()),
                       'share': round(float(mask.mean()), 6), 'faces_protected': len(faces),
+                      'face_detector': FACE_DETECTOR if protect_faces else None,
                       'stamp_pixels_protected': int(stamp.sum()), 'method': 'OpenCV inpaint (Telea)'})
     else:
         cleaned = img
-    if colour:
-        cleaned, shift = restore.fix_colour(cleaned, exclude=stamp)
-        steps.append({'step': 'colour', 'cast_shift_ab': [round(v, 2) for v in shift]})
+    if color:
+        cleaned, shift = restore.fix_color(cleaned, exclude=stamp)
+        steps.append({'step': 'color', 'cast_shift_ab': [round(v, 2) for v in shift]})
     if crop:
         l, t, r, b = restore.find_crop(img)
         cleaned = np.ascontiguousarray(cleaned[t:b, l:r])
@@ -151,7 +154,7 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, colour=
         'status': 'Cleaned copy — requires visual review',
         'source': str(source), 'source_sha256': digest,
         'source_recipe_sha256': sha(source_recipe) if source_recipe.exists() else None,
-        'options': settings(crop, dust, protect_faces, colour, straighten, lift_shadows, red_eye),
+        'options': settings(crop, dust, protect_faces, color, straighten, lift_shadows, red_eye),
         'steps': steps, 'faces': faces,
         'source_dimensions': [w, h], 'output_dimensions': [cleaned.shape[1], cleaned.shape[0]],
         'output': str(dest), 'output_sha256': sha(dest),
@@ -162,10 +165,10 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, colour=
     return record
 
 
-def settings(crop=True, dust=True, protect_faces=True, colour=False, straighten=None,
+def settings(crop=True, dust=True, protect_faces=True, color=False, straighten=None,
              lift_shadows=None, red_eye=False):
     """The clean options, as recorded in a recipe and compared by roll_sources()."""
-    return {'crop': crop, 'dust': dust, 'protect_faces': protect_faces, 'colour': colour,
+    return {'crop': crop, 'dust': dust, 'protect_faces': protect_faces, 'color': color,
             'straighten': straighten, 'lift_shadows': lift_shadows, 'red_eye': red_eye}
 
 

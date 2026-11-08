@@ -1,4 +1,4 @@
-"""Clean-up of converted film scans: film-holder crop, colour cast correction, dust removal.
+"""Clean-up of converted film scans: film-holder crop, color cast correction, dust removal.
 
 Ported from the author's earlier archive clean-up tools; the algorithms are unchanged. Only a
 per-photo no-crop list, which named two archive photos, is gone: use
@@ -27,7 +27,7 @@ def _is_strip(line):
 
 def _edge_run(lines, sliver):
     """Lines from the edge to the inner end of a holder strip, or 0. The strip may begin after a
-    sliver (up to `sliver` lines) of the neighbouring frame, and must end in a sharp change."""
+    sliver (up to `sliver` lines) of the neighboring frame, and must end in a sharp change."""
     flags = [_is_strip(l) for l in lines]
     start = next((i for i, f in enumerate(flags[:sliver + 1]) if f), None)
     if start is None:
@@ -117,9 +117,9 @@ def box_mask(shape, boxes, pad=0.5):
     return m
 
 
-# ---------------------------------------------------------------- colour
+# ---------------------------------------------------------------- color
 
-def colour_cast(img):
+def color_cast(img):
     """Mean a*, b* (Lab, 0 = neutral) of the image's near-neutral pixels: a measure of cast."""
     small = cv2.resize(img, (400, int(400 * img.shape[0] / img.shape[1])), interpolation=cv2.INTER_AREA)
     lab = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
@@ -130,12 +130,12 @@ def colour_cast(img):
     return float(a[neutral].mean()), float(b[neutral].mean())
 
 
-def correct_colour(img, exclude=None, strength=0.8, low=0.5, high=99.5, max_gain_spread=0.35):
+def correct_color(img, exclude=None, strength=0.8, low=0.5, high=99.5, max_gain_spread=0.35):
     """Per-channel levels (black and white point from percentiles) blended with the original.
 
     Removes the scanner's cast and lifts washed-out scans. `exclude` (bool mask) keeps the date
     stamp and similar out of the statistics. Channel gains are kept within max_gain_spread of each
-    other so a genuinely warm or cool scene is not forced grey."""
+    other so a genuinely warm or cool scene is not forced gray."""
     sample = img if exclude is None else img[~exclude]
     sample = sample.reshape(-1, 3)
     if len(sample) > 400_000:
@@ -151,14 +151,14 @@ def correct_colour(img, exclude=None, strength=0.8, low=0.5, high=99.5, max_gain
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def neutralise_cast(img, exclude=None, strength=0.7, cap=10.0):
-    """Shift colour (Lab a*, b*) so the photo's near-neutral areas move toward grey.
+def neutralize_cast(img, exclude=None, strength=0.7, cap=10.0):
+    """Shift color (Lab a*, b*) so the photo's near-neutral areas move toward gray.
 
-    The cast is measured on low-chroma, mid-brightness pixels (walls, whites, greys); the shift is
-    a fraction (`strength`) of it and never more than `cap` Lab units, so genuinely coloured scenes
-    keep most of their colour."""
+    The cast is measured on low-chroma, mid-brightness pixels (walls, whites, grays); the shift is
+    a fraction (`strength`) of it and never more than `cap` Lab units, so genuinely colored scenes
+    keep most of their color."""
     probe = img if exclude is None else np.where(exclude[..., None], 128, img).astype(np.uint8)
-    a_m, b_m = colour_cast(probe)
+    a_m, b_m = color_cast(probe)
     shift = -strength * np.array([a_m, b_m])
     n = float(np.hypot(*shift))
     if n > cap:
@@ -170,10 +170,10 @@ def neutralise_cast(img, exclude=None, strength=0.7, cap=10.0):
     return out, (float(shift[0]), float(shift[1]))
 
 
-def fix_colour(img, exclude=None):
+def fix_color(img, exclude=None):
     """Levels per channel (lifts washed-out scans, removes channel offsets), then cast removal."""
-    levelled = correct_colour(img, exclude=exclude, strength=0.6)
-    return neutralise_cast(levelled, exclude=exclude)
+    leveled = correct_color(img, exclude=exclude, strength=0.6)
+    return neutralize_cast(leveled, exclude=exclude)
 
 
 # ---------------------------------------------------------------- manual adjustments
@@ -235,30 +235,30 @@ def dust_mask(img, protect=None, threshold=28, max_area_fraction=2.5e-5, smooth_
     # Dust is sparse; bright detail in foliage, gravel or lace comes in crowds. Count candidates
     # around each one and leave crowded ones alone.
     win = max(31, int(min(h, w) * 0.04) | 1)
-    centres = np.zeros((h, w), np.float32)
+    centers = np.zeros((h, w), np.float32)
     cxs = np.clip(stats[1:, 0] + stats[1:, 2] // 2, 0, w - 1)
     cys = np.clip(stats[1:, 1] + stats[1:, 3] // 2, 0, h - 1)
-    centres[cys, cxs] = 1
-    crowd = cv2.boxFilter(centres, -1, (win, win), normalize=False)
+    centers[cys, cxs] = 1
+    crowd = cv2.boxFilter(centers, -1, (win, win), normalize=False)
     keep = np.zeros(n, bool)
     for i in range(1, n):
         x, y, bw, bh, area = stats[i]
         if crowd[cys[i - 1], cxs[i - 1]] > max_crowd:
             continue
         speck = area <= max_area
-        # fibres and hairs: thin along their whole length, straight or curled
-        fibre = area <= max_area * 12 and thickness[i] <= thin and max(bw, bh) >= 4 * thickness[i] * 2
+        # fibers and hairs: thin along their whole length, straight or curled
+        fiber = area <= max_area * 12 and thickness[i] <= thin and max(bw, bh) >= 4 * thickness[i] * 2
         short_line = False
-        if fibre and not speck:
+        if fiber and not speck:
             # Long straight thin lines are as likely to be an edge in the scene (a fence rail, a
-            # frame) as a scratch, so they stay. Curled fibres go, and so do short straight
+            # frame) as a scratch, so they stay. Curled fibers go, and so do short straight
             # scratches, which are checked below against smooth surroundings (skin, wall, sky).
             path = area / max(1.0, 2 * float(thickness[i]))
             if path < 1.4 * float(np.hypot(bw, bh)):
                 if max(bw, bh) > min(h, w) * 0.02:
                     continue
                 short_line = True
-        if not (speck or fibre):
+        if not (speck or fiber):
             continue
         ys, xs = np.nonzero(labels[y:y + bh, x:x + bw] == i)
         std_here = float(np.median(local_std[y + ys, x + xs]))

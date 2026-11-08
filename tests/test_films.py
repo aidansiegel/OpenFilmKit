@@ -78,7 +78,7 @@ class Conversion(unittest.TestCase):
     x,y=np.asarray(c['irradiance']),np.asarray(c['response'])
     self.assertTrue((np.diff(y)>0).all(),(ident,channel));self.assertEqual((x[0],y[0],x[-1],y[-1]),(0,0,1,1),(ident,channel))
     if model.get('film')!='slide':self.assertTrue(.05<np.interp(.5,y,x)<.6,(ident,channel))
- def test_slide_profiles_render_a_grey_scene_grey(self):
+ def test_slide_profiles_render_a_gray_scene_gray(self):
   hi=np.array([.8,.7,.6])
   for ident in films.profile_ids():
    model=films.profile(ident)
@@ -189,7 +189,7 @@ class OtherScanSoftware(unittest.TestCase):
   for src in (plain,rgbi):conversion.convert(argparse.Namespace(source=str(src),output=str(src.with_suffix('.jpg')),**args))
   self.assertEqual(plain.with_suffix('.jpg').read_bytes(),rgbi.with_suffix('.jpg').read_bytes())
  def test_scans_without_16_bit_rgb_are_refused(self):
-  for name,data,photometric in (('8-bit.tif',(self.rgb>>8).astype('uint8'),'rgb'),('grey.tif',self.rgb[:,:,0],'minisblack'),('float.tif',self.rgb.astype('float32'),'rgb')):
+  for name,data,photometric in (('8-bit.tif',(self.rgb>>8).astype('uint8'),'rgb'),('gray.tif',self.rgb[:,:,0],'minisblack'),('float.tif',self.rgb.astype('float32'),'rgb')):
    tifffile.imwrite(self.root/name,data,photometric=photometric)
    with self.assertRaisesRegex(ValueError,'16 bits per channel'):conversion.raw_open(self.root/name)
   (self.root/'junk.tif').write_bytes(b'not a tiff')

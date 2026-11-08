@@ -96,11 +96,11 @@ def make_lut(model,low,high):
     return table
 
 def slide_lut(model,low,high):
-    """Positive transparencies: keep the slide's look, but neutralise the differences between its dye curves.
+    """Positive transparencies: keep the slide's look, but neutralize the differences between its dye curves.
 
     The clearest film in the frame (the high level) is taken as minimum density. Each channel's density goes back
-    to exposure through that channel's own curve, then forward through the average of the three curves, so a grey
-    in the scene comes out grey while the slide keeps its contrast. Generic: a plain stretch between the levels."""
+    to exposure through that channel's own curve, then forward through the average of the three curves, so a gray
+    in the scene comes out gray while the slide keeps its contrast. Generic: a plain stretch between the levels."""
     lo,hi=validate_levels(low,high);raw=np.arange(65536)/65535;table=np.empty((65536,3),np.uint16)
     if model['kind']=='generic':linear=np.clip((raw[:,None]-lo)/(hi-lo),0,1)
     else:

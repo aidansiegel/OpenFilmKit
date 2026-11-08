@@ -241,7 +241,7 @@ def cmd_clean(args, out):
             if not roll.is_roll(path):
                 raise Fail(f'{path} is a folder but not a roll')
             sources += clean.roll_sources(path, clean.settings(
-                args.crop, args.dust, args.faces, args.colour, args.straighten,
+                args.crop, args.dust, args.faces, args.color, args.straighten,
                 args.lift_shadows, args.red_eye))
         else:
             sources.append(path)
@@ -253,7 +253,7 @@ def cmd_clean(args, out):
     for source in sources:
         try:
             record = clean.clean(source, args.output, crop=args.crop, dust=args.dust,
-                                 protect_faces=args.faces, colour=args.colour,
+                                 protect_faces=args.faces, color=args.color,
                                  straighten=args.straighten, lift_shadows=args.lift_shadows,
                                  red_eye=args.red_eye)
         except clean.CleanError as e:
@@ -396,10 +396,11 @@ def parser():
     s.add_argument('sources', nargs='+', help='JPEG/PNG conversions, or a roll folder (its uncleaned conversions)')
     s.add_argument('--output', help='output file (one source only); default <name>-clean-vN beside it')
     s.add_argument('--no-crop', dest='crop', action='store_false', help='keep film-holder edges')
-    s.add_argument('--no-dust', dest='dust', action='store_false', help='skip dust and fibre removal')
+    s.add_argument('--no-dust', dest='dust', action='store_false', help='skip dust and fiber removal')
     s.add_argument('--no-faces', dest='faces', action='store_false',
                    help="don't detect faces (they're otherwise protected from dust removal)")
-    s.add_argument('--colour', action='store_true', help='also correct levels and colour cast')
+    s.add_argument('--color', action='store_true', help='also correct levels and color cast')
+    s.add_argument('--colour', dest='color', action='store_true', help=argparse.SUPPRESS)
     s.add_argument('--straighten', type=float, metavar='DEGREES', help='rotate, positive = counter-clockwise')
     s.add_argument('--lift-shadows', type=float, metavar='GAMMA', help='brighten shadows, e.g. 0.85')
     s.add_argument('--red-eye', action='store_true', help='darken flash-red pupils')

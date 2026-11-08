@@ -51,6 +51,7 @@ class Clean(unittest.TestCase):
         for x, y in specks:
             self.assertLess(out[y + 1, x + 1].max(), 200, (x, y))
         dust = [s for s in rec['steps'] if s['step'] == 'dust'][0]
+        self.assertIsNone(dust['face_detector'])
         self.assertGreater(dust['pixels_filled'], 0)
         recipe = json.loads(Path(rec['output'] + '.json').read_text())
         self.assertEqual(recipe['source_sha256'], clean.sha(src))
@@ -66,6 +67,10 @@ class Clean(unittest.TestCase):
         out = np.asarray(Image.open(rec['output']).convert('RGB')).astype(int)
         self.assertGreater(out[543, 771].min(), 200)
         self.assertGreater([s for s in rec['steps'] if s['step'] == 'dust'][0]['stamp_pixels_protected'], 0)
+
+    def test_recipe_names_the_face_detector(self):
+        dust = [s for s in clean.clean(self.write(scene()), crop=False)['steps'] if s['step'] == 'dust'][0]
+        self.assertIn('Haar', dust['face_detector'])
 
     def test_whole_face_box_is_protected_without_landmarks(self):
         m = restore.feature_mask((100, 100, 3), [{'box': [20, 30, 60, 80]}])

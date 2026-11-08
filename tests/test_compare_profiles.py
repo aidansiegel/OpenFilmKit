@@ -12,7 +12,7 @@ from openfilmkit.films import stocks as films
 from test_films import tiff16
 
 def scene(seed=4,w=720,h=480):
-    """Linear-light test scene: coloured shapes on a textured ground (features to register), plus grey steps."""
+    """Linear-light test scene: colored shapes on a textured ground (features to register), plus gray steps."""
     rng=np.random.default_rng(seed);im=Image.new('RGB',(w,h),(118,112,104));d=ImageDraw.Draw(im)
     for _ in range(260):
         x,y=rng.integers(0,w),rng.integers(0,h);s=int(rng.integers(6,40));c=tuple(int(v) for v in rng.integers(25,235,3))
@@ -46,7 +46,7 @@ class PrintComparisonChecks(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):film_compare.score_pairs(args)
         r=json.loads((self.root/'out'/'results.json').read_text())[0]
         self.assertNotIn('error',r);self.assertGreater(r['registration']['inliers'],100);self.assertGreater(r['registration']['overlap'],.5)
-        s=r['scores'];self.assertLess(s['kodak-portra400']['dE_bal'],s['generic']['dE_bal']);self.assertLess(s['kodak-portra400']['grey'],s['generic']['grey']);self.assertLess(s['kodak-portra400']['dL'],s['generic']['dL'])
+        s=r['scores'];self.assertLess(s['kodak-portra400']['dE_bal'],s['generic']['dE_bal']);self.assertLess(s['kodak-portra400']['gray'],s['generic']['gray']);self.assertLess(s['kodak-portra400']['dL'],s['generic']['dL'])
         self.assertTrue(list((self.root/'out'/'views').glob('*.jpg')));self.assertIn('kodak-portra400',(self.root/'out'/'summary.txt').read_text())
     def test_a_turned_trimmed_print_registers_onto_its_negative(self):
         lin=scene();tiff16(self.root/'neg.tif',negative(lin,films.profile('kodak-portra400')))
