@@ -24,9 +24,9 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 | M3 | Film profiles and conversion | Done: 142 data-sheet profiles; `stocks`, `profiles`, `roll set`, `convert`. |
 | M4 | Scanner color profiling (IT8 target, ArgyllCMS) | Not started; needs an IT8 transparency target to finish. |
 | M5 | Cleanup: dust, fibres, holder edges, red eye | Done: `clean`. |
-| M6 | Packaging: Homebrew tap for macOS and Linux | Formula written; first full install tests in progress. |
+| M6 | Packaging: Homebrew tap for macOS and Linux | Done: `brew install` tested on macOS (arm64) and Fedora (aarch64). |
 | M7 | Terminal UI (Textual) | Not started. |
-| M8 | First release | Not started. |
+| M8 | First release | 0.1.0, an early release ahead of M4 and M7, so the kit can be installed and tried. |
 
 ## Known limits
 

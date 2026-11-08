@@ -1,5 +1,6 @@
-# Homebrew formula for OpenFilmKit. At release, copy into aidansiegel/homebrew-openfilmkit as
-# Formula/openfilmkit.rb and set url/sha256 to the release tarball.
+# Homebrew formula for OpenFilmKit. Each release is copied into aidansiegel/homebrew-openfilmkit as
+# Formula/openfilmkit.rb with the release tarball's sha256 filled in; this copy can't hold the
+# checksum of the tarball it is part of, so it keeps a placeholder.
 class Openfilmkit < Formula
   desc "Free film scanning and negative conversion from the command line, built on SANE"
   homepage "https://github.com/aidansiegel/OpenFilmKit"

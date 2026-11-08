@@ -8,9 +8,6 @@ is the Plustek OpticFilm 8200i SE. Expect changes.
 
 ## Install
 
-The Homebrew formula is published with the first release; until then this command won't find it.
-The formula itself is in `packaging/homebrew/`.
-
 ```sh
 brew install aidansiegel/openfilmkit/openfilmkit
 openfilmkit doctor
