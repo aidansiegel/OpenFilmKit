@@ -31,7 +31,8 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 ## Known limits
 
 - The OpticFilm 8200i SE (GL128) has "basic" status in SANE; infrared isn't implemented.
-- Windows isn't supported (no SANE).
+- Scanning on Windows isn't supported (no SANE); `convert` and `clean` run there on raw scans from
+  SilverFast or VueScan.
 - Two identical scanners connected at once can't be told apart (no per-unit ID).
 - `clean`'s holder crop is conservative, and a long thin scratch that breaks into short pieces can
   be removed piecemeal, leaving a faint dashed trace.

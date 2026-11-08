@@ -17,9 +17,9 @@ The formula builds OpenFilmKit's own SANE runtime (a pinned upstream commit plus
 `patches/`), kept separate from Homebrew's `sane-backends`. On Linux, `openfilmkit doctor` prints
 the one command that installs the USB permission rule.
 
-`pip install "openfilmkit[clean]"` installs conversion and cleanup only: `convert` and `clean`
-work on scans from any software, but `scan` needs the SANE runtime that the Homebrew formula
-builds (or build it yourself from a checkout with `tools/build_sane.py`).
+`pip install "openfilmkit[clean]"` installs conversion and cleanup only, on macOS, Linux or
+Windows. `scan` needs the SANE runtime that the Homebrew formula builds (or build it yourself from
+a checkout with `tools/build_sane.py`); on Windows, scan with SilverFast or VueScan instead (below).
 
 ## Use
 
@@ -38,6 +38,21 @@ recipe beside it that says exactly how it was made.
 - `convert` picks the film's response curve from `openfilmkit stocks` / `openfilmkit profiles`
   (142 profiles digitized from manufacturers' data sheets).
 - `clean --no-dust` trims holder edges only; run `clean` again later for dust.
+
+## Scans from SilverFast or VueScan
+
+`convert` also reads the raw scans SilverFast and VueScan save, so a scanner OpenFilmKit can't
+drive yet, or a Windows PC (where SANE doesn't run), still gets the same conversion and cleanup.
+Save the scan before any inversion or color correction:
+
+- **SilverFast:** save the raw HDR (48-bit) or HDRi (64-bit, with infrared) scan, not a converted
+  positive. Tested with an HDRi scan from SilverFast 9 and an OpticFilm 8200i.
+- **VueScan:** in the Output tab, save a raw file as 48-bit RGB or 64-bit RGBI (raw files need the
+  Professional edition). Not yet tested with a real VueScan file.
+
+Uncompressed and compressed (LZW, ZIP) files both work. The infrared channel stays in your file
+but isn't used yet. 8-bit scans are refused, and an already-inverted positive won't convert
+correctly.
 
 ## Scanners
 

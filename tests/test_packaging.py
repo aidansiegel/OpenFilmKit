@@ -89,6 +89,7 @@ class UdevRules(unittest.TestCase):
             self.assertTrue(status['installed'])
             self.assertNotIn('fix', status)
 
+    @unittest.skipIf(sys.platform == 'win32', 'symlinks need extra privileges on Windows')
     def test_install_command_uses_the_path_as_given(self):
         # Homebrew points the launcher at opt/…/sane, a link to the versioned Cellar folder.
         with tempfile.TemporaryDirectory() as d:

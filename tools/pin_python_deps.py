@@ -15,8 +15,8 @@ import sys
 import urllib.request
 from pathlib import Path
 
-PACKAGES = {'numpy': '2.4.2', 'pillow': '12.0.0', 'opencv-python-headless': '4.14.0.94',
-            'setuptools': None}
+PACKAGES = {'numpy': '2.4.2', 'pillow': '12.0.0', 'tifffile': '2026.10.15',
+            'imagecodecs': '2026.10.10', 'opencv-python-headless': '4.14.0.94', 'setuptools': None}
 PYTHON = '314'   # the formula's python@3.14
 PLATFORMS = {'macOS arm64': r'macosx_\d+_\d+_(arm64|universal2)',
              'macOS x86_64': r'macosx_\d+_\d+_(x86_64|universal2)',

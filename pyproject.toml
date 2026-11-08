@@ -16,13 +16,15 @@ classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Environment :: Console",
     "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Graphics :: Capture :: Scanners",
 ]
 # Capture needs only the standard library plus OpenFilmKit's SANE runtime (built by
-# tools/build_sane.py); conversion needs numpy and Pillow; clean also needs OpenCV.
-dependencies = ["numpy>=1.24", "pillow>=10"]
+# tools/build_sane.py); conversion needs numpy, Pillow and tifffile (imagecodecs decodes LZW,
+# the usual compression in SilverFast and VueScan files); clean also needs OpenCV.
+dependencies = ["numpy>=1.24", "pillow>=10", "tifffile>=2024.1.30", "imagecodecs>=2024.1.1"]
 
 [project.optional-dependencies]
 # OpenCV 5 moved the Haar cascades (CascadeClassifier) out of the main package.

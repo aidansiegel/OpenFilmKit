@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 try:
  import numpy as np
+ import tifffile
  from PIL import Image
  from openfilmkit.films import convert as conversion,density as d
 except ImportError:np=None
@@ -155,6 +156,44 @@ class Conversion(unittest.TestCase):
    with contextlib.redirect_stdout(out):code=cli.main(['convert',str(master),'--json'])
    self.assertEqual(code,0);rec=json.loads(out.getvalue())
    self.assertEqual(Path(rec['output']).resolve(),(r/'derived'/expected).resolve());self.assertEqual(rec['film_selection']['profile_id'],'agfa-hdc200');self.assertEqual(rec['film_selection']['selection_basis'],'saved roll choice')
+
+@unittest.skipIf(np is None,'needs numpy, Pillow and tifffile')
+class OtherScanSoftware(unittest.TestCase):
+ """Raw scans as SilverFast (HDR, HDRi) and VueScan (raw, RGBI raw) save them read the same as the kit's masters."""
+ def setUp(self):
+  self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+  self.rgb=np.linspace(2000,50000,24*20*3).reshape(20,24,3).astype('uint16');self.ir=np.full((20,24),60000,np.uint16)
+ def tearDown(self):self.temp.cleanup()
+ def write(self,name,data,byteorder='<',thumbnail=False,infrared_page=False,**kw):
+  path=self.root/name
+  with tifffile.TiffWriter(path,byteorder=byteorder) as w:
+   w.write(data,photometric='rgb',**kw)
+   if thumbnail:w.write(self.rgb[::4,::4].copy(),photometric='rgb',subfiletype=1)
+   # SilverFast marks its infrared page as a mask (NewSubfileType 4), which tifffile won't write by name.
+   if infrared_page:w.write(self.ir,photometric='minisblack',extratags=[(254,'I',1,4,True)])
+  return path
+ def test_layouts_and_compressions_read_identically(self):
+  cases={'lzw':dict(data=self.rgb,compression='lzw'),'lzw-predictor':dict(data=self.rgb,compression='lzw',predictor=True),
+   'zip':dict(data=self.rgb,compression='zlib'),'packbits':dict(data=self.rgb,compression='packbits'),
+   'planar':dict(data=np.moveaxis(self.rgb,-1,0),planarconfig='separate'),'big-endian':dict(data=self.rgb,byteorder='>'),
+   'vuescan-rgbi':dict(data=np.dstack([self.rgb,self.ir]),extrasamples=['unspecified']),
+   'silverfast-hdri':dict(data=self.rgb,thumbnail=True,infrared_page=True)}
+  for name,kw in cases.items():
+   self.assertTrue(np.array_equal(conversion.raw_open(self.write(name+'.tif',**kw)),self.rgb),name)
+ def test_plain_files_are_memory_mapped(self):
+  for kw in (dict(data=self.rgb),dict(data=self.rgb,byteorder='>'),dict(data=self.rgb,thumbnail=True,infrared_page=True)):
+   self.assertIsInstance(conversion.raw_open(self.write('plain.tif',**kw)).base,np.memmap)
+ def test_compressed_rgbi_scan_converts_like_the_plain_one(self):
+  plain=self.write('plain.tif',self.rgb);rgbi=self.write('rgbi.tif',np.dstack([self.rgb,self.ir]),extrasamples=['unspecified'],compression='lzw')
+  args=dict(stock=None,roll=None,profile='kodak-gold200',crop=None,levels_from=None,max_side=0,contrast=1.3,gamma=1.,warmth=0.)
+  for src in (plain,rgbi):conversion.convert(argparse.Namespace(source=str(src),output=str(src.with_suffix('.jpg')),**args))
+  self.assertEqual(plain.with_suffix('.jpg').read_bytes(),rgbi.with_suffix('.jpg').read_bytes())
+ def test_scans_without_16_bit_rgb_are_refused(self):
+  for name,data,photometric in (('8-bit.tif',(self.rgb>>8).astype('uint8'),'rgb'),('grey.tif',self.rgb[:,:,0],'minisblack'),('float.tif',self.rgb.astype('float32'),'rgb')):
+   tifffile.imwrite(self.root/name,data,photometric=photometric)
+   with self.assertRaisesRegex(ValueError,'16 bits per channel'):conversion.raw_open(self.root/name)
+  (self.root/'junk.tif').write_bytes(b'not a tiff')
+  with self.assertRaisesRegex(ValueError,'Not a readable TIFF'):conversion.raw_open(self.root/'junk.tif')
 
 @unittest.skipIf(np is None,'needs numpy and Pillow')
 class Density(unittest.TestCase):

@@ -1,5 +1,8 @@
 """Stock-aware viewing copies from linear RGB16 negatives and slides; masters stay unchanged.
 
+Reads the kit's own masters and the raw scans SilverFast (48-bit HDR, 64-bit HDRi) and VueScan (48-bit raw,
+64-bit RGBI raw) save, so scans made with those on any system convert the same way.
+
 Ported from the author's earlier film-scan tool (film_convert.py). The LUTs and rendering are unchanged, so output
 matches film-scan byte for byte; capture records may be film-scan's or the kit's, and roll
 choices come from the roll folder's roll.json.
@@ -7,6 +10,7 @@ choices come from the roll folder's roll.json.
 from pathlib import Path
 import datetime,hashlib,json,math,struct
 import numpy as np
+import tifffile
 from PIL import Image,ImageCms
 from . import density as film_density, stocks as film_stocks
 from .. import roll as rolls
@@ -17,16 +21,27 @@ def sha(path):
     with open(path,'rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
 
 def raw_open(path):
-    with Image.open(path) as im:
-        t=im.tag_v2;w,h=im.size
-        if tuple(t.get(258,()))!=(16,16,16) or t.get(259)!=1 or t.get(277)!=3 or t.get(262)!=2 or t.get(284,1)!=1:
-            raise ValueError('Conversion requires an uncompressed, chunky RGB16 linear TIFF.')
-        offsets,counts=list(t[273]),list(t[279])
-        if sum(counts)!=w*h*6 or any(a+n!=b for a,n,b in zip(offsets,counts,offsets[1:])):
-            raise ValueError('TIFF strips must form contiguous RGB16 data.')
-    with open(path,'rb') as f:order='<' if f.read(2)==b'II' else '>'
-    if offsets[0]+w*h*6>Path(path).stat().st_size:raise ValueError('TIFF pixel data is truncated.')
-    return np.memmap(path,dtype=order+'u2',mode='r',offset=offsets[0],shape=(h,w,3))
+    """The scan's full-size image as a (height, width, 3) uint16 array: memory-mapped when stored plainly, decoded otherwise.
+
+    Either byte order, chunky or planar samples, and any compression tifffile (with imagecodecs) reads. A fourth,
+    infrared sample (VueScan RGBI) is dropped; thumbnails and SilverFast's separate infrared page are skipped."""
+    try:
+        with tifffile.TiffFile(path) as tif:
+            page=next((p for p in tif.pages if not p.subfiletype&5),None)  # 1: reduced-size copy, 4: mask/infrared
+            if page is None:raise ValueError('TIFF has no full-size image.')
+            spp,h,w=page.samplesperpixel,page.imagelength,page.imagewidth
+            if page.photometric!=tifffile.PHOTOMETRIC.RGB or page.bitspersample!=16 or page.sampleformat!=1 or spp not in (3,4):
+                raise ValueError(f'Conversion needs a linear RGB scan at 16 bits per channel (48-bit, or 64-bit with infrared); '
+                                 f'this TIFF is {page.photometric.name} with {spp} x {page.bitspersample}-bit samples.')
+            planar=page.planarconfig==tifffile.PLANARCONFIG.SEPARATE;shape=(spp,h,w) if planar else (h,w,spp)
+            if page.compression==tifffile.COMPRESSION.NONE and page.is_contiguous:
+                offset=page.dataoffsets[0]
+                if offset+h*w*spp*2>Path(path).stat().st_size:raise ValueError('TIFF pixel data is truncated.')
+                a=np.memmap(path,dtype=tif.byteorder+'u2',mode='r',offset=offset,shape=shape)
+            else:a=page.asarray().reshape(shape)
+    except tifffile.TiffFileError as e:raise ValueError(f'Not a readable TIFF: {e}') from e
+    except KeyError as e:raise ValueError(f'Unsupported TIFF compression: {e}') from e
+    return np.moveaxis(a[:3],0,-1) if planar else a[:,:,:3]
 
 def srgb_icc():
     """The embedded sRGB profile, with a fixed creation date so a conversion is byte-reproducible.
