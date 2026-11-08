@@ -25,7 +25,8 @@ classifiers = [
 dependencies = ["numpy>=1.24", "pillow>=10"]
 
 [project.optional-dependencies]
-clean = ["opencv-python-headless>=4.8"]
+# OpenCV 5 moved the Haar cascades (CascadeClassifier) out of the main package.
+clean = ["opencv-python-headless>=4.8,<5"]
 
 [project.urls]
 Homepage = "https://github.com/aidansiegel/OpenFilmKit"

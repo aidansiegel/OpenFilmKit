@@ -17,6 +17,10 @@ The formula builds OpenFilmKit's own SANE runtime (a pinned upstream commit plus
 `patches/`), kept separate from Homebrew's `sane-backends`. On Linux, `openfilmkit doctor` prints
 the one command that installs the USB permission rule.
 
+`pip install "openfilmkit[clean]"` installs conversion and cleanup only: `convert` and `clean`
+work on scans from any software, but `scan` needs the SANE runtime that the Homebrew formula
+builds (or build it yourself from a checkout with `tools/build_sane.py`).
+
 ## Use
 
 ```sh

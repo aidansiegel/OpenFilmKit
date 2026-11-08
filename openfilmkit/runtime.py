@@ -44,7 +44,9 @@ class Runtime:
         candidates = sorted((p for p in RUNTIMES.glob('*') if (p / 'build-provenance.json').is_file()),
                             key=lambda p: p.stat().st_mtime, reverse=True)
         if not candidates:
-            raise RuntimeMissing(f'no kit runtime under {RUNTIMES}; build one with tools/build_sane.py')
+            raise RuntimeMissing(f'no kit runtime under {RUNTIMES}. Scanning needs one: install with '
+                                  'Homebrew (brew install aidansiegel/openfilmkit/openfilmkit), or build '
+                                  'one from a source checkout with tools/build_sane.py')
         return cls(candidates[0])
 
     def env(self):
