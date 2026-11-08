@@ -2,7 +2,7 @@
 # Formula/openfilmkit.rb with the release tarball's sha256 filled in; this copy can't hold the
 # checksum of the tarball it is part of, so it keeps a placeholder.
 class Openfilmkit < Formula
-  desc "Free film scanning and negative conversion from the command line, built on SANE"
+  desc "Free command-line film scanning and negative conversion, built on SANE"
   homepage "https://github.com/aidansiegel/OpenFilmKit"
   url "https://github.com/aidansiegel/OpenFilmKit/archive/refs/tags/v0.1.0.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
@@ -30,7 +30,7 @@ class Openfilmkit < Formula
   end
 
   def install
-    python = Formula["python@3.14"].opt_bin/"python3.14"
+    python = formula_opt_bin("python@3.14")/"python3.14"
     resource("sane-backends").stage buildpath/"sane-src"
     # Also regenerates openfilmkit/data from the same SANE tree before the package is installed.
     system python, "tools/build_sane.py", "--work", buildpath/"sane-work",
@@ -42,6 +42,9 @@ class Openfilmkit < Formula
     system venv/"bin/pip", "install", "--no-cache-dir", "--only-binary=:all:", "--require-hashes",
            "-r", "packaging/requirements-brew.txt"
     system venv/"bin/pip", "install", "--no-cache-dir", "--no-deps", "--no-build-isolation", "."
+
+    # The build log names Homebrew's compiler shims, which would tie the install to them.
+    inreplace libexec/"sane/build.log", Superenv.shims_path.to_s, "<homebrew-shims>", audit_result: false
 
     (bin/"openfilmkit").write_env_script venv/"bin/openfilmkit", OPENFILMKIT_RUNTIME: opt_libexec/"sane"
   end
