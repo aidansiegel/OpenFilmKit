@@ -91,6 +91,27 @@ The two models (about 100 MB) are downloaded once, on first use, from this proje
 against their SHA-256; `openfilmkit models --fetch` gets them ahead of time. Both run in OpenCV.
 A 73-megapixel scan, 16-bit included, takes about five minutes and at most 2.5 GB of memory.
 
+### Job packages: cleaning on another machine
+
+`clean --pack DIR` doesn't clean: it writes one job package per photo into `DIR`, a folder that
+holds the photo, the options and nothing else it depends on. Copy the packages anywhere
+OpenFilmKit is installed (a small always-on machine, say) and run them there, then bring the
+results back:
+
+```sh
+openfilmkit clean roll-07 --scratches --pack jobs/
+openfilmkit job run jobs/*                # here, or on the machine the folder was copied to
+openfilmkit job collect jobs/<id>         # result and recipe, beside the original
+```
+
+A package is named after its job ID, a checksum of everything that decides the result: the
+command, the options, the photo, the OpenFilmKit version and the models. Packing the same work
+twice gives the same package, running a finished job again does nothing, and a run that's
+interrupted leaves the job unfinished, never half done, so it can simply be run again. A job runs
+only on the OpenFilmKit version that packed it, since another version can give different pixels.
+`job show` says whether a package is packed, started or done; recipes record the machine a job
+ran on. Running jobs over SSH and a shared queue for several machines are next (see ROADMAP.md).
+
 ## Scans from SilverFast or VueScan
 
 `convert` also reads the raw scans SilverFast and VueScan save, so a scanner OpenFilmKit can't

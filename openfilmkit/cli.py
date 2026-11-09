@@ -251,14 +251,15 @@ def cmd_clean(args, out):
         raise Fail('--spot is for one photo at a time')
     if not sources:
         out.say('Nothing to clean: no conversions without a copy cleaned with these settings.')
+    options = dict(crop=args.crop, dust=args.dust, protect_faces=args.faces, color=args.color,
+                   straighten=args.straighten, lift_shadows=args.lift_shadows, red_eye=args.red_eye,
+                   scratches=args.scratches, spare_long_lines=args.spare_long_lines, spots=args.spot)
+    if args.pack:
+        return pack_clean(sources, args, options, out)
     records = []
     for source in sources:
         try:
-            record = clean.clean(source, args.output, crop=args.crop, dust=args.dust,
-                                 protect_faces=args.faces, color=args.color,
-                                 straighten=args.straighten, lift_shadows=args.lift_shadows,
-                                 red_eye=args.red_eye, scratches=args.scratches,
-                                 spare_long_lines=args.spare_long_lines, spots=args.spot, say=out.error)
+            record = clean.clean(source, args.output, say=out.error, **options)
         except clean.CleanError as e:
             out.error(f'openfilmkit: {source}: {e}')
             records.append({'source': str(source), 'error': str(e)})
@@ -267,6 +268,53 @@ def cmd_clean(args, out):
             f"{s['step']} {s.get('pixels_filled', '')}".strip() if s['step'] == 'dust' else s['step']
             for s in record['steps'] if s['step'] != 'crop' or s['changed'])
         out.say(f"{source.name} → {Path(record['output']).name} ({summary or 'no changes needed'})")
+        records.append(record)
+    out.result(records)
+    return 0 if all('error' not in r for r in records) else 1
+
+
+def pack_clean(sources, args, options, out):
+    from . import jobs
+    packed = []
+    for source in sources:
+        try:
+            package = jobs.pack_clean(source, args.pack, output=args.output, **options)
+        except (jobs.JobError, OSError) as e:
+            out.error(f'openfilmkit: {source}: {e}')
+            packed.append({'source': str(source), 'error': str(e)})
+            continue
+        out.say(f'{source.name} → job {package.name[:12]} in {package.parent}')
+        packed.append({'source': str(source), 'package': str(package), 'id': package.name})
+    out.result(packed)
+    return 0 if all('error' not in p for p in packed) else 1
+
+
+def cmd_job(args, out):
+    from . import jobs
+    try:
+        if args.job_command == 'show':
+            info = jobs.show(args.package)
+            out.say(f"{info['id'][:12]}: {info['state']} — {info['job']['command']} of {info['about']['source']}"
+                    f" → {info['about']['output_name']}")
+            out.result(info)
+            return 0
+        if args.job_command == 'collect':
+            record = jobs.collect(args.package, args.to)
+            out.say(f"Collected {record['output']}")
+            out.result(record)
+            return 0
+    except jobs.JobError as e:
+        raise Fail(str(e))
+    records = []
+    for package in args.packages:   # run
+        try:
+            already = jobs.done(package)
+            record = already or jobs.run(package, say=out.error)
+        except jobs.JobError as e:
+            out.error(f'openfilmkit: {package}: {e}')
+            records.append({'package': str(package), 'error': str(e)})
+            continue
+        out.say(f"{Path(package).name[:12]}: {'already done' if already else 'done'} → {Path(record['output']).name}")
         records.append(record)
     out.result(records)
     return 0 if all('error' not in r for r in records) else 1
@@ -432,6 +480,20 @@ def parser():
     s.add_argument('--spot', type=spot, action='append', metavar='X,Y[,R]',
                    help='also fill a spot you point at: X,Y in pixels of a copy cleaned with the same options, '
                         'radius R (default 0.4%% of the short side); repeat for more spots')
+    s.add_argument('--pack', metavar='DIR',
+                   help="don't clean now: write a job package per photo into DIR, for `openfilmkit job run` "
+                        'here or on another machine')
+
+    j = sub.add_parser('job', help='run and collect job packages (made with clean --pack)').add_subparsers(
+        dest='job_command', required=True)
+    s = j.add_parser('run', parents=[common], help='run job packages; finished ones are left as they are')
+    s.add_argument('packages', nargs='+')
+    s = j.add_parser('show', parents=[common], help="a package's ID, state and job")
+    s.add_argument('package')
+    s = j.add_parser('collect', parents=[common],
+                     help="copy a finished job's result and recipe out, beside the original by default")
+    s.add_argument('package')
+    s.add_argument('--to', metavar='DIR', help='folder to copy into')
 
     s = sub.add_parser('scan', parents=[common], help='capture linear 48-bit TIFF masters')
     s.add_argument('target', help='a roll folder (next frame) or an explicit .tif path')
@@ -469,7 +531,7 @@ def cmd_models(args, out):
 
 COMMANDS = {'doctor': cmd_doctor, 'scanners': cmd_scanners, 'options': cmd_options,
             'scan': cmd_scan, 'stocks': cmd_stocks, 'profiles': cmd_profiles,
-            'convert': cmd_convert, 'clean': cmd_clean, 'models': cmd_models}
+            'convert': cmd_convert, 'clean': cmd_clean, 'models': cmd_models, 'job': cmd_job}
 
 
 def _pipe_error(e):
