@@ -121,7 +121,7 @@ def load(path):
         with Image.open(path) as im:
             if im.mode not in ('RGB', 'L', 'P', 'RGBA'):
                 raise CleanError(f'{im.mode} image; clean works on 8-bit converted viewing copies')
-            return np.ascontiguousarray(np.asarray(im.convert('RGB')))
+            return np.array(im.convert('RGB'))   # writable: clean works on it in place
     except (OSError, ValueError) as e:
         raise CleanError(f'cannot read image: {e}') from e
 
@@ -168,25 +168,33 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
     img = load(source)
     view = restore.to8   # decisions on 8 bits; for an 8-bit image this is the image itself
     h, w = img.shape[:2]
+    bits = 16 if img.dtype == np.uint16 else 8
     steps = []
 
-    stamp = restore.stamp_mask(view(img))
-    faces = find_faces(view(img)) if protect_faces else []
+    # A 73 MP 16-bit scan is 440 MB, so the steps below work on one copy of it, in place where
+    # they can (it was loaded for this run alone), and the 8-bit view is made once.
+    small = view(img)
+    stamp = restore.stamp_mask(small)
+    faces = find_faces(small) if protect_faces else []
+    box = restore.find_crop(small) if crop else None
     if dust:
         protect = stamp | restore.feature_mask(img.shape, faces)   # eyes and mouths
-        mask = restore.dust_mask(view(img), protect=protect)
-        cleaned = restore.remove_dust(img, mask)
+        mask = restore.dust_mask(small, protect=protect)
+        del small, protect
+        cleaned = restore.remove_dust(img, mask, out=img)
         steps.append({'step': 'dust', 'pixels_filled': int(mask.sum()),
                       'share': round(float(mask.mean()), 6), 'faces_protected': len(faces),
                       'face_detector': FACE_DETECTOR if protect_faces else None,
                       'stamp_pixels_protected': int(stamp.sum()), 'method': 'OpenCV inpaint (Telea)'})
     else:
+        del small
         cleaned = img
+    del img
     if color:
         cleaned, shift = restore.fix_color(cleaned, exclude=stamp)
         steps.append({'step': 'color', 'cast_shift_ab': [round(v, 2) for v in shift]})
     if crop:
-        l, t, r, b = restore.find_crop(view(img))
+        l, t, r, b = box
         cleaned = np.ascontiguousarray(cleaned[t:b, l:r])
         steps.append({'step': 'crop', 'box': [l, t, r, b], 'changed': [l, t, r, b] != [0, 0, w, h]})
     model_fill = None
@@ -203,8 +211,8 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         if cleaned.dtype == np.uint8:
             cleaned = repaired
         else:   # every change is inside the filled mask
-            cleaned = cleaned.copy()
             cleaned[filled > 0] = repaired[filled > 0].astype(np.uint16) * 257
+        del repaired, filled
         n = int(stats.get('pixels_filled', 0))
         model_fill = {'model': 'MI-GAN (Picsart AI Research), an inpainting model',
                       'where': 'scratches, fibers and debris found by the scratch-detection model',
@@ -227,7 +235,6 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
             cleaned = corrected
         else:   # only the pupils change
             changed = (corrected != small).any(axis=2)
-            cleaned = cleaned.copy()
             cleaned[changed] = corrected[changed].astype(np.uint16) * 257
         steps.append({'step': 'red_eye', 'faces_with_eyes': len(found),
                       'eyes_corrected': [list(e) for e in fixed]})
@@ -248,7 +255,7 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         'steps': steps, 'faces': faces,
         'source_dimensions': [w, h], 'output_dimensions': [cleaned.shape[1], cleaned.shape[0]],
         'output': str(dest), 'output_sha256': sha(dest),
-        'bits_per_channel': {'source': 16 if img.dtype == np.uint16 else 8,
+        'bits_per_channel': {'source': bits,
                              'output': 16 if cleaned.dtype == np.uint16 and dest.suffix.lower() in ('.tif', '.tiff') else 8},
         'libraries': {'opencv': cv2.__version__, 'numpy': np.__version__},
         # Only the damaged spots a model filled in, if any; everything else is the scan.

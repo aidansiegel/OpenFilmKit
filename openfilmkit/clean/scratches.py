@@ -27,6 +27,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from . import restore
 from .. import models
 
 FACE_PAD = 0.3          # face box widened by this share of its size on each side
@@ -37,9 +38,20 @@ DETECT_SIDE, DETECT_PAD = 1700, 64
 # ---------------------------------------------------------------- models
 
 def load_nets(say=None):
-    """(scratch net, fill net) as cv2.dnn networks, fetching the model files if needed."""
-    return (cv2.dnn.readNetFromONNX(str(models.path('scratch', say))),
-            cv2.dnn.readNetFromONNX(str(models.path('fill', say))))
+    """Fetch the model files if needed (ModelError if that fails) and return load(name), which
+    reads 'scratch' or 'fill' as a cv2.dnn network. repair() reads each one when it needs it, so
+    only one is in memory at a time: after a 512 px tile the scratch net holds 1.3 GB.
+
+    OpenCV's Winograd convolution is turned off for the scratch net: it took another 1.1 GB, for
+    a speed-up of a second a tile and probabilities that differ by a few millionths."""
+    files = {name: str(models.path(name, say)) for name in ('scratch', 'fill')}
+
+    def load(name):
+        net = cv2.dnn.readNetFromONNX(files[name])
+        if name == 'scratch':
+            net.enableWinograd(False)
+        return net
+    return load
 
 
 def scratch_probability(net, img):
@@ -109,19 +121,21 @@ def skin_area(img, faces, texture_factor=2.5, grain_floor=1.5):
     out = np.zeros((h, w), bool)
     if not faces:
         return out
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(np.float32)
-    fine = gray - cv2.GaussianBlur(gray, (0, 0), 1.5)
-    limit = texture_factor * max(1.4826 * float(np.median(np.abs(fine[::2, ::2]))), grain_floor)
-    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB).astype(np.float32)
-    for f in faces:
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    limit = texture_factor * max(restore.grain_level(gray), grain_floor)
+    for f in faces:   # color and detail only inside each face's zone, not over the whole photo
         l, t, r, b, fw = face_box(f, img.shape)
         x0, y0, x1, y1 = f['box']
-        core = lab[int(y0 + 0.45 * (y1 - y0)):int(y0 + 0.85 * (y1 - y0)),
-                   int(x0 + 0.3 * (x1 - x0)):int(x0 + 0.7 * (x1 - x0))].reshape(-1, 3)
+        middle = img[int(y0 + 0.45 * (y1 - y0)):int(y0 + 0.85 * (y1 - y0)),
+                     int(x0 + 0.3 * (x1 - x0)):int(x0 + 0.7 * (x1 - x0))]
+        core = (cv2.cvtColor(np.ascontiguousarray(middle), cv2.COLOR_RGB2LAB).astype(np.float32).reshape(-1, 3)
+                if middle.size else np.zeros((0, 3), np.float32))
         if r <= l or b <= t or len(core) < 20:
             continue
         L0, a0, b0 = np.median(core, axis=0)
-        reg, fr = lab[t:b, l:r], fine[t:b, l:r]
+        reg = cv2.cvtColor(np.ascontiguousarray(img[t:b, l:r]), cv2.COLOR_RGB2LAB).astype(np.float32)
+        fa, fb, fc, fd = max(0, t - 8), min(h, b + 8), max(0, l - 8), min(w, r + 8)
+        fr = restore.fine_detail(gray[fa:fb, fc:fd])[t - fa:b - fa, l - fc:r - fc]
         k = max(3, int(0.04 * fw) | 1)
         local = np.sqrt(np.maximum(cv2.blur(fr * fr, (k, k)) - cv2.blur(fr, (k, k)) ** 2, 0))
         near = np.abs(reg[..., 0] - L0) < 70
@@ -215,15 +229,15 @@ def drop_dark_marks(mask, gray, grow, margin=10):
     """Remove thick detections darker than their surroundings (scene, not damage). Returns count."""
     h, w = mask.shape
     n, lab, st, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 3)
-    thick = np.zeros(n, np.float32)
-    np.maximum.at(thick, lab.ravel(), dist.ravel())
     dropped = 0
     for i in range(1, n):
-        if thick[i] <= 3 * grow:
-            continue
         x, y, bw, bh, _ = st[i]
-        pad = max(6, int(thick[i] * 2))
+        # thickness: the largest distance from its inside to its edge, on its own box
+        ya, yb, xa, xb = max(0, y - 2), min(h, y + bh + 2), max(0, x - 2), min(w, x + bw + 2)
+        thick = float(cv2.distanceTransform((lab[ya:yb, xa:xb] == i).astype(np.uint8), cv2.DIST_L2, 3).max())
+        if thick <= 3 * grow:
+            continue
+        pad = max(6, int(thick * 2))
         ya, yb, xa, xb = max(0, y - pad), min(h, y + bh + pad), max(0, x - pad), min(w, x + bw + pad)
         comp = lab[ya:yb, xa:xb] == i
         ring = (cv2.dilate(comp.astype(np.uint8), np.ones((2 * pad + 1, 2 * pad + 1), np.uint8)) > 0) & (lab[ya:yb, xa:xb] == 0)
@@ -327,19 +341,16 @@ def build_mask(img, prob, protect, faces, dust_mask=None, thr=0.4, face_thr=0.15
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     protect = protect.copy()
-    thresh = np.full((h, w), thr, np.float32)
     faces_area = np.zeros((h, w), bool)   # whole widened face boxes: for long lines and the stamp
     for f in faces:
         l, t, r, b, _ = face_box(f, img.shape)
         faces_area[t:b, l:r] = True
         protect[t:b, l:r] = False
     skin = skin_area(img, faces)
-    thresh[skin] = face_thr
     catch, irises = eye_masks(gray, faces)
     protect |= catch
-    thresh[irises] = thr
-    mask = (prob >= thresh).astype(np.uint8)
-    del thresh
+    # the threshold: thr, face_thr on skin, thr again inside the eyes
+    mask = ((prob >= thr) | (skin & ~irises & (prob >= face_thr))).astype(np.uint8)
     grow = grow_for(img.shape)
     stats = {'dark_marks_kept': drop_dark_marks(mask, gray.astype(np.float32), grow)}
     stats['bright_blobs_completed'] = complete_bright_blobs(mask, gray, rgb=img)
@@ -440,15 +451,17 @@ def match_grain(res, mask, sigma=1.2, block=48, smooth_ratio=0.75, min_area=200,
     only pieces whose fine texture is weaker than smooth_ratio of the ring around them are touched.
     Each gets real grain from clean nearby blocks of the photo (the photo minus a light blur), scaled
     to make up just the missing amount, so a fill never ends up grainier than its neighborhood.
-    Returns (result, pieces matched)."""
+    Returns (result, pieces matched).
+
+    Each piece is worked out on the part of the photo it reads (its window, the donor blocks up to
+    four blocks away, and the blur's reach), not on float copies of the whole photo, and only its
+    own pixels are written."""
     rng = np.random.default_rng(seed)
     filled = mask > 0
     h, w = mask.shape
-    f = res.astype(np.float32)
-    grain = f - cv2.GaussianBlur(f, (0, 0), sigma)
-    gl = grain.mean(axis=2)
-    out = f.copy()
+    out = res.copy()
     n, lab, st, _ = cv2.connectedComponentsWithStats(filled.astype(np.uint8), connectivity=8)
+    reach = 5 * block + 8   # donors start up to 4 blocks away and are a block wide; the blur reaches 5 px
     done = 0
     for i in range(1, n):
         x, y, bw, bh, area = st[i]
@@ -456,12 +469,17 @@ def match_grain(res, mask, sigma=1.2, block=48, smooth_ratio=0.75, min_area=200,
             continue
         p = 24
         ya, yb, xa, xb = max(0, y - p), min(h, y + bh + p), max(0, x - p), min(w, x + bw + p)
+        ra, rb, rc, rd = max(0, ya - reach), min(h, yb + reach), max(0, xa - reach), min(w, xb + reach)
+        f = res[ra:rb, rc:rd].astype(np.float32)
+        grain = f - cv2.GaussianBlur(f, (0, 0), sigma)
+        here = (slice(ya - ra, yb - ra), slice(xa - rc, xb - rc))
+        gl = grain[here].mean(axis=2)
         comp = lab[ya:yb, xa:xb] == i
         inner = cv2.erode(comp.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
         ring = (cv2.dilate(comp.astype(np.uint8), np.ones((25, 25), np.uint8)) > 0) & ~filled[ya:yb, xa:xb]
         if inner.sum() < 50 or ring.sum() < 100:
             continue
-        have, want = float(gl[ya:yb, xa:xb][inner].std()), float(gl[ya:yb, xa:xb][ring].std())
+        have, want = float(gl[inner].std()), float(gl[ring].std())
         if have >= smooth_ratio * want:
             continue
         gain = np.sqrt(max(want ** 2 - have ** 2, 0)) / max(want, 1e-3)
@@ -478,24 +496,25 @@ def match_grain(res, mask, sigma=1.2, block=48, smooth_ratio=0.75, min_area=200,
                     dy, dx = cy + int(r * np.sin(t)), cx + int(r * np.cos(t))
                     if dy < 0 or dx < 0 or dy + bh2 > h or dx + bw2 > w or filled[dy:dy + bh2, dx:dx + bw2].any():
                         continue
-                    add[by:by + bh2, bx:bx + bw2] = grain[dy:dy + bh2, dx:dx + bw2] * gain
+                    add[by:by + bh2, bx:bx + bw2] = grain[dy - ra:dy - ra + bh2, dx - rc:dx - rc + bw2] * gain
                     break
         soft = cv2.GaussianBlur(comp.astype(np.float32), (0, 0), 1.5) * comp
-        out[ya:yb, xa:xb] += add * soft[..., None]
+        piece = np.clip(f[here] + add * soft[..., None], 0, 255).astype(np.uint8)
+        out[ya:yb, xa:xb][comp] = piece[comp]   # soft is zero off the piece: nothing else changes
         done += 1
-    return np.clip(out, 0, 255).astype(np.uint8), done
+    return out, done
 
 
-def repair(img, faces, protect, dust_mask, nets, spare_long_lines=False):
-    """The whole pass on an RGB uint8 image: (result, stats, mask). Every change is inside mask."""
-    scratch_net, fill_net = nets
-    prob = scratch_probability(scratch_net, img)
+def repair(img, faces, protect, dust_mask, load, spare_long_lines=False):
+    """The whole pass on an RGB uint8 image: (result, stats, mask). Every change is inside mask.
+    `load`: load_nets()."""
+    prob = scratch_probability(load('scratch'), img)
     mask, stats = build_mask(img, prob, protect, faces, dust_mask=dust_mask, spare_long_lines=spare_long_lines)
     del prob
     if not mask.any():
         return img.copy(), dict(stats, model_calls=0, invented_replaced=0, spots_evened=0, grain_matched=0), mask
-    telea = cv2.inpaint(img, mask * 255, 3, cv2.INPAINT_TELEA)
-    res, calls = fill_damage(img, mask, fill_window(fill_net))
+    telea = restore.inpaint(img, mask, 3)
+    res, calls = fill_damage(img, mask, fill_window(load('fill')))
     res, settle = settle_fill(res, telea, mask, grow_for(img.shape))
     res, grained = match_grain(res, mask)
     return res, dict(stats, **settle, grain_matched=grained, model_calls=calls, pixels_filled=int(mask.sum())), mask

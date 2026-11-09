@@ -16,9 +16,59 @@ import cv2
 import numpy as np
 
 
+BAND = 1024   # rows per strip for full-image filters: keeps a 73 MP scan's temporaries small
+
+
+def by_bands(fn, h, margin, band=BAND):
+    """Yield (y0, y1, fn(a, b) cropped to rows y0:y1) for full-width strips. fn(a, b) works on rows
+    a:b, with `margin` extra rows above and below (where the image has them) so that a filter that
+    reaches `margin` rows sees the same pixels as on the whole image, and rows y0:y1 come out the
+    same."""
+    for y0 in range(0, h, band):
+        y1 = min(h, y0 + band)
+        a, b = max(0, y0 - margin), min(h, y1 + margin)
+        yield y0, y1, fn(a, b)[y0 - a:y0 - a + (y1 - y0)]
+
+
+def grain_level(gray):
+    """Robust std of a photo's fine detail (mostly grain): 1.4826 x the median |high-pass| over every
+    other pixel. Computed in strips, so the whole photo is never held as floats."""
+    h = gray.shape[0]
+    parts = []
+    for y0, y1, fine in by_bands(lambda a, b: fine_detail(gray[a:b]), h, 8):
+        parts.append(np.abs(fine[(-y0) % 2::2, ::2]).ravel())   # every other row of the whole image
+    return 1.4826 * float(np.median(np.concatenate(parts)))
+
+
+def fine_detail(gray):
+    """Fine detail: the gray image minus a light blur (sigma 1.5; it reaches 6 pixels)."""
+    gf = gray.astype(np.float32)
+    return gf - cv2.GaussianBlur(gf, (0, 0), 1.5)
+
+
+TO8 = ((np.arange(65536) + 128) // 257).astype(np.uint8)   # rint(v / 257) for every 16-bit value
+
+
 def to8(img):
-    """An 8-bit copy of a 16-bit image (65535 / 255 = 257 exactly); 8-bit images pass through."""
-    return img if img.dtype == np.uint8 else np.rint(img / 257.0).astype(np.uint8)
+    """An 8-bit copy of a 16-bit image (65535 / 255 = 257 exactly); 8-bit images pass through.
+    Made in strips: dividing a 73 MP scan at once took 3.5 GB of floats."""
+    if img.dtype == np.uint8:
+        return img
+    out = np.empty(img.shape, np.uint8)
+    for y0 in range(0, img.shape[0], BAND):
+        out[y0:y0 + BAND] = TO8[img[y0:y0 + BAND]]
+    return out
+
+
+def in_strips(fn, img):
+    """fn applied to full-width strips of img, for per-pixel work (the same result as on the whole
+    image, without whole-image float copies)."""
+    first = fn(img[:BAND])
+    out = np.empty(img.shape[:1] + first.shape[1:], first.dtype)
+    out[:BAND] = first
+    for y0 in range(BAND, img.shape[0], BAND):
+        out[y0:y0 + BAND] = fn(img[y0:y0 + BAND])
+    return out
 
 
 # ---------------------------------------------------------------- crop
@@ -165,9 +215,12 @@ def correct_color(img, exclude=None, strength=0.8, low=0.5, high=99.5, max_gain_
     gain = np.clip(gain, g_mid * (1 - max_gain_spread), g_mid * (1 + max_gain_spread))
     lo = np.clip(lo, 0, 60)
     scale = 1.0 if img.dtype == np.uint8 else 257.0   # the 8-bit levels, at the image's depth
-    out = (img.astype(np.float32) - lo * scale) * gain
-    out = img.astype(np.float32) * (1 - strength) + out * strength
-    return np.clip(out, 0, 255 * scale).astype(img.dtype)
+
+    def levels(part):
+        out = (part.astype(np.float32) - lo * scale) * gain
+        out = part.astype(np.float32) * (1 - strength) + out * strength
+        return np.clip(out, 0, 255 * scale).astype(img.dtype)
+    return in_strips(levels, img)
 
 
 def neutralize_cast(img, exclude=None, strength=0.7, cap=10.0):
@@ -183,17 +236,18 @@ def neutralize_cast(img, exclude=None, strength=0.7, cap=10.0):
     n = float(np.hypot(*shift))
     if n > cap:
         shift *= cap / n
-    if img.dtype != np.uint8:   # float Lab has the same a*, b* units as 8-bit Lab (offset by 128)
-        lab = cv2.cvtColor(img.astype(np.float32) / 65535, cv2.COLOR_RGB2LAB)
+
+    def shifted(part):
+        if img.dtype != np.uint8:   # float Lab has the same a*, b* units as 8-bit Lab (offset by 128)
+            lab = cv2.cvtColor(part.astype(np.float32) / 65535, cv2.COLOR_RGB2LAB)
+            lab[..., 1] += shift[0]
+            lab[..., 2] += shift[1]
+            return np.rint(np.clip(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB), 0, 1) * 65535).astype(np.uint16)
+        lab = cv2.cvtColor(part, cv2.COLOR_RGB2LAB).astype(np.float32)
         lab[..., 1] += shift[0]
         lab[..., 2] += shift[1]
-        out = np.rint(np.clip(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB), 0, 1) * 65535).astype(np.uint16)
-        return out, (float(shift[0]), float(shift[1]))
-    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB).astype(np.float32)
-    lab[..., 1] += shift[0]
-    lab[..., 2] += shift[1]
-    out = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
-    return out, (float(shift[0]), float(shift[1]))
+        return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
+    return in_strips(shifted, img), (float(shift[0]), float(shift[1]))
 
 
 def fix_color(img, exclude=None):
@@ -230,7 +284,7 @@ def lift_shadows(img, gamma=0.85, amount=1.0):
     if img.dtype != np.uint8:
         lut = np.linspace(0, 1, 65536) ** gamma * 65535
         lut = np.clip(np.arange(65536) * (1 - amount) + lut * amount, 0, 65535).astype(np.uint16)
-        return lut[img]
+        return in_strips(lambda part: lut[part], img)
     lut = (np.linspace(0, 1, 256) ** gamma * 255).astype(np.float32)
     lut = np.clip(np.arange(256) * (1 - amount) + lut * amount, 0, 255).astype(np.uint8)
     return cv2.LUT(img, lut)
@@ -257,53 +311,62 @@ def dust_mask(img, protect=None, threshold=28, max_area_fraction=2.5e-5, smooth_
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     k = max(5, int(min(h, w) * 0.004) | 1)
     bg = cv2.medianBlur(gray, k)
-    diff = gray.astype(np.int16) - bg.astype(np.int16)
-    cand = (diff > threshold).astype(np.uint8)
+    cand = ((gray.astype(np.int16) - bg) > threshold).astype(np.uint8)
     # smoothness of the surroundings: local std of the median-filtered image, leaving out the
     # candidates themselves. A speck about as wide as the median window leaks into the filtered
     # copy, and counted in, it made its own surroundings look busy: on a 960-pixel portrait that
-    # turned away a quarter of dust-sized specks on plain ground.
-    bgf = bg.astype(np.float32)
-    around = (cv2.dilate(cand, np.ones((3, 3), np.uint8)) == 0).astype(np.float32)
+    # turned away a quarter of dust-sized specks on plain ground. Worked out in strips.
     win = (k * 2 + 1, k * 2 + 1)
-    count = np.maximum(cv2.blur(around, win), 1e-3)
-    mean = cv2.blur(bgf * around, win) / count
-    sq = cv2.blur(bgf * bgf * around, win) / count
-    local_std = np.sqrt(np.maximum(sq - mean * mean, 0))
-    # fine detail and the photo's grain level (robust std of it, from a quarter of the pixels)
-    gf = gray.astype(np.float32)
-    fine = gf - cv2.GaussianBlur(gf, (0, 0), 1.5)
-    grain = 1.4826 * float(np.median(np.abs(fine[::2, ::2])))
-    texture_limit = texture_factor * max(grain, grain_floor)
+
+    def smoothness(a, b):
+        bgf = bg[a:b].astype(np.float32)
+        around = (cv2.dilate(cand[max(0, a - 1):b + 1], np.ones((3, 3), np.uint8))[a - max(0, a - 1):][:b - a]
+                  == 0).astype(np.float32)
+        count = np.maximum(cv2.blur(around, win), 1e-3)
+        mean = cv2.blur(bgf * around, win) / count
+        sq = cv2.blur(bgf * bgf * around, win) / count
+        return np.sqrt(np.maximum(sq - mean * mean, 0))
+    local_std = np.empty((h, w), np.float32)
+    for y0, y1, part in by_bands(smoothness, h, k + 2):
+        local_std[y0:y1] = part
+    del bg
+    # the photo's grain level, for the texture test below
+    texture_limit = texture_factor * max(grain_level(gray), grain_floor)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(cand, connectivity=8)
     max_area = max(12, int(h * w * max_area_fraction))
     thin = max(2, int(min(h, w) * 0.0012))
-    # thickness of each candidate: the largest distance from its inside to its edge
-    dist = cv2.distanceTransform(cand, cv2.DIST_L2, 3)
-    thickness = np.zeros(n, np.float32)
-    np.maximum.at(thickness, labels.ravel(), dist.ravel())
     # Dust is sparse; bright detail in foliage, gravel or lace comes in crowds. Count candidates
     # around each one and leave crowded ones alone.
-    win = max(31, int(min(h, w) * 0.04) | 1)
-    centers = np.zeros((h, w), np.float32)
+    cwin = max(31, int(min(h, w) * 0.04) | 1)
     cxs = np.clip(stats[1:, 0] + stats[1:, 2] // 2, 0, w - 1)
     cys = np.clip(stats[1:, 1] + stats[1:, 3] // 2, 0, h - 1)
-    centers[cys, cxs] = 1
-    crowd = cv2.boxFilter(centers, -1, (win, win), normalize=False)
+    crowd_at = np.zeros(n - 1, np.float32)
+
+    def crowding(a, b):
+        centers = np.zeros((b - a, w), np.float32)
+        inside = (cys >= a) & (cys < b)
+        centers[cys[inside] - a, cxs[inside]] = 1
+        return cv2.boxFilter(centers, -1, (cwin, cwin), normalize=False)
+    for y0, y1, part in by_bands(crowding, h, cwin):
+        here = (cys >= y0) & (cys < y1)
+        crowd_at[here] = part[cys[here] - y0, cxs[here]]
     keep = np.zeros(n, bool)
     for i in range(1, n):
         x, y, bw, bh, area = stats[i]
-        if crowd[cys[i - 1], cxs[i - 1]] > max_crowd:
+        if crowd_at[i - 1] > max_crowd:
             continue
         speck = area <= max_area
+        # thickness: the largest distance from its inside to its edge (worked out on its own box)
+        ya, yb, xa, xb = max(0, y - 2), min(h, y + bh + 2), max(0, x - 2), min(w, x + bw + 2)
+        thick = float(cv2.distanceTransform((labels[ya:yb, xa:xb] == i).astype(np.uint8), cv2.DIST_L2, 3).max())
         # fibers and hairs: thin along their whole length, straight or curled
-        fiber = area <= max_area * 12 and thickness[i] <= thin and max(bw, bh) >= 4 * thickness[i] * 2
+        fiber = area <= max_area * 12 and thick <= thin and max(bw, bh) >= 4 * thick * 2
         short_line = False
         if fiber and not speck:
             # Long straight thin lines are as likely to be an edge in the scene (a fence rail, a
             # frame) as a scratch, so they stay. Curled fibers go, and so do short straight
             # scratches, which are checked below against smooth surroundings (skin, wall, sky).
-            path = area / max(1.0, 2 * float(thickness[i]))
+            path = area / max(1.0, 2 * thick)
             if path < 1.4 * float(np.hypot(bw, bh)):
                 if max(bw, bh) > min(h, w) * 0.02:
                     continue
@@ -320,7 +383,9 @@ def dust_mask(img, protect=None, threshold=28, max_area_fraction=2.5e-5, smooth_
         ya, yb, xa, xb = max(0, cy - r), min(h, cy + r + 1), max(0, cx - r), min(w, cx + r + 1)
         comp = (labels[ya:yb, xa:xb] == i).astype(np.uint8)
         ring = ~(cv2.dilate(comp, np.ones((5, 5), np.uint8)) > 0) & (labels[ya:yb, xa:xb] == 0)
-        if ring.sum() >= 20 and float(fine[ya:yb, xa:xb][ring].std()) > texture_limit:
+        fa, fb, fc, fd = max(0, ya - 8), min(h, yb + 8), max(0, xa - 8), min(w, xb + 8)
+        fine = fine_detail(gray[fa:fb, fc:fd])[ya - fa:yb - fa, xa - fc:xb - fc]
+        if ring.sum() >= 20 and float(fine[ring].std()) > texture_limit:
             continue
         keep[i] = True
     mask = keep[labels]
@@ -330,13 +395,41 @@ def dust_mask(img, protect=None, threshold=28, max_area_fraction=2.5e-5, smooth_
     return cv2.dilate(mask.astype(np.uint8), np.ones((2 * grow + 1, 2 * grow + 1), np.uint8)) > 0
 
 
-def remove_dust(img, mask):
+def remove_dust(img, mask, out=None):
+    """Fill the mask from its surroundings, into `out` (a copy of img by default; img itself is
+    fine)."""
+    return inpaint(img, mask, max(2, int(min(img.shape[:2]) * 0.0015)), out)
+
+
+def inpaint(img, mask, radius, out=None):
+    """cv2.inpaint(img, mask, radius, INPAINT_TELEA), into `out` (a copy of img by default; img
+    itself is fine). 16-bit images are filled per channel, which at 8 bits equals filling the
+    three channels at once.
+
+    Telea looks no further than its radius from a hole, twice over (the distances it works out
+    round a hole, then the pixels it averages), so each group of nearby holes is filled in a
+    window round it: the same pixels as filling the whole image at once, without the whole
+    image's work arrays (a 73 MP scan's took over a gigabyte)."""
+    if out is None:
+        out = img.copy()
     if not mask.any():
-        return img
-    radius = max(2, int(min(img.shape[:2]) * 0.0015))
-    if img.dtype != np.uint8:   # 16-bit inpainting is single-channel; per channel equals 3-channel at 8 bits
-        holes = mask.astype(np.uint8) * 255
-        return np.dstack([cv2.inpaint(np.ascontiguousarray(img[..., c]), holes, radius, cv2.INPAINT_TELEA)
-                          for c in range(3)])
-    return cv2.inpaint(img, mask.astype(np.uint8) * 255, radius, cv2.INPAINT_TELEA)
+        return out
+    reach = 2 * radius + 2
+    holes = (mask > 0).astype(np.uint8) * 255
+    groups, _ = cv2.findContours(cv2.dilate(holes, np.ones((2 * reach + 1, 2 * reach + 1), np.uint8)),
+                                 cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for g in groups:
+        x, y, bw, bh = cv2.boundingRect(g)   # the group and `reach` round it
+        here = np.zeros((bh, bw), np.uint8)
+        cv2.drawContours(here, [g], -1, 1, cv2.FILLED, offset=(-x, -y))
+        win = img[y:y + bh, x:x + bw]
+        hole = holes[y:y + bh, x:x + bw]
+        if img.dtype != np.uint8:   # OpenCV inpaints 16 bits one channel at a time
+            filled = np.dstack([cv2.inpaint(np.ascontiguousarray(win[..., c]), hole, radius, cv2.INPAINT_TELEA)
+                                for c in range(3)])
+        else:
+            filled = cv2.inpaint(np.ascontiguousarray(win), hole, radius, cv2.INPAINT_TELEA)
+        mine = (hole > 0) & (here > 0)
+        out[y:y + bh, x:x + bw][mine] = filled[mine]
+    return out
 

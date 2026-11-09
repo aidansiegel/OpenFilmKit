@@ -257,5 +257,43 @@ class Deep(unittest.TestCase):
         self.write(scene16(), 'frame-01-v1.tif')
         self.assertEqual([p.name for p in clean.roll_sources(r)], ['frame-01-v1.tif'])
 
+
+@unittest.skipIf(clean is None, 'needs OpenCV, numpy and Pillow')
+class InPieces(unittest.TestCase):
+    """Big scans are worked on in strips and windows; the pixels must come out as on the whole image."""
+    def holes(self, shape, seed=4):
+        rng = np.random.default_rng(seed)
+        m = np.zeros(shape[:2], np.uint8)
+        for _ in range(40):                                       # specks, some close together
+            x, y = rng.integers(0, shape[1] - 4), rng.integers(0, shape[0] - 4)
+            m[y:y + rng.integers(1, 5), x:x + rng.integers(1, 5)] = 1
+        m[300:302, 50:800] = 1                                    # a long scratch
+        m[0:3, 10:40] = 1                                         # on the edge
+        m[-2:, -30:] = 1
+        return m
+
+    def test_inpainting_window_by_window_equals_the_whole_image(self):
+        import cv2
+        for img in (scene(), scene16()):
+            mask = self.holes(img.shape)
+            for radius in (3, 9):
+                if img.dtype == np.uint8:
+                    whole = cv2.inpaint(img, mask * 255, radius, cv2.INPAINT_TELEA)
+                else:
+                    whole = np.dstack([cv2.inpaint(np.ascontiguousarray(img[..., c]), mask * 255, radius,
+                                                   cv2.INPAINT_TELEA) for c in range(3)])
+                self.assertTrue((restore.inpaint(img, mask, radius) == whole).all(), (img.dtype, radius))
+
+    def test_strips_equal_the_whole_image(self):
+        from unittest import mock
+        img = scene16()
+        with mock.patch.object(restore, 'BAND', 10 ** 6):
+            whole = [restore.fix_color(img)[0], restore.lift_shadows(img, 0.8), restore.fix_color(scene())[0]]
+        with mock.patch.object(restore, 'BAND', 64):
+            strips = [restore.fix_color(img)[0], restore.lift_shadows(img, 0.8), restore.fix_color(scene())[0]]
+            self.assertTrue((restore.to8(img) == np.rint(img / 257.0)).all())
+        for a, b in zip(whole, strips):
+            self.assertTrue((a == b).all())
+
 if __name__ == '__main__':
     unittest.main()
