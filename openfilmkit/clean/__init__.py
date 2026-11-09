@@ -33,6 +33,7 @@ from PIL import Image
 
 from .. import __version__
 from . import redeye, restore, scratches as scratch_pass
+from .checkpoints import Checkpoints
 from .. import models
 
 Image.MAX_IMAGE_PIXELS = None
@@ -149,11 +150,12 @@ def default_output(source):
 
 def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=False,
           straighten=None, lift_shadows=None, red_eye=False, scratches=False, spare_long_lines=False,
-          spots=None, say=None):
+          spots=None, say=None, checkpoints=None):
     """Clean `source` into a new file with a recipe beside it (<output>.json). Returns the recipe.
     `spots`: [(x, y) or (x, y, radius)] to fill by hand, in pixels of the finished copy (so they
     can be read off a copy cleaned earlier with the same options); the radius defaults to 0.4 % of
-    the short side. `say` reports model downloads (scratches only)."""
+    the short side. `say` reports model downloads (scratches only). `checkpoints`: a folder for
+    stage checkpoints (see checkpoints.py), belonging to this photo and these options alone."""
     source = Path(source).expanduser().resolve()
     dest = Path(output).expanduser().resolve() if output else default_output(source)
     recipe_path = Path(str(dest) + '.json')
@@ -176,16 +178,33 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
     bits = 16 if img.dtype == np.uint16 else 8
     steps = []
 
+    ck = Checkpoints(checkpoints) if checkpoints else None
+
     # A 73 MP 16-bit scan is 440 MB, so the steps below work on one copy of it, in place where
     # they can (it was loaded for this run alone), and the 8-bit view is made once.
-    small = view(img)
-    stamp = restore.stamp_mask(small)
-    faces = find_faces(small) if protect_faces else []
-    box = restore.find_crop(small) if crop else None
+    small = None
+    setup = ck.load('setup') if ck else None
+    if setup:
+        stamp, faces, box = setup['stamp'], setup['info']['faces'], setup['info']['box']
+    else:
+        small = view(img)
+        stamp = restore.stamp_mask(small)
+        faces = find_faces(small) if protect_faces else []
+        box = restore.find_crop(small) if crop else None
+        if ck:
+            ck.save('setup', stamp=stamp, info={'faces': faces, 'box': box})
     if dust:
-        protect = stamp | restore.feature_mask(img.shape, faces)   # eyes and mouths
-        mask = restore.dust_mask(small, protect=protect)
-        del small, protect
+        saved = ck.load('dust') if ck else None
+        if saved:
+            mask = saved['mask']
+        else:
+            small = view(img) if small is None else small
+            protect = stamp | restore.feature_mask(img.shape, faces)   # eyes and mouths
+            mask = restore.dust_mask(small, protect=protect)
+            del protect
+            if ck:
+                ck.save('dust', mask=mask)
+        del small
         cleaned = restore.remove_dust(img, mask, out=img)
         steps.append({'step': 'dust', 'pixels_filled': int(mask.sum()),
                       'share': round(float(mask.mean()), 6), 'faces_protected': len(faces),
@@ -208,11 +227,16 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
             nets = scratch_pass.load_nets(say)
         except models.ModelError as e:
             raise CleanError(str(e)) from e
-        # Faces and the stamp again, on the cropped copy the pass works on.
+        # Faces and the stamp again, on the cropped copy the pass works on (unless its mask is saved).
         small = view(cleaned)
-        on = find_faces(small) if protect_faces else []
-        repaired, stats, filled = scratch_pass.repair(small, on, restore.stamp_mask(small), restore.dust_mask, nets,
-                                                      spare_long_lines=spare_long_lines)
+        if ck and ck.has('scratch_mask'):
+            on = protect = None
+        else:
+            on = find_faces(small) if protect_faces else []
+            protect = restore.stamp_mask(small)
+        repaired, stats, filled = scratch_pass.repair(small, on, protect, restore.dust_mask, nets,
+                                                      spare_long_lines=spare_long_lines, checkpoints=ck)
+        faces_on = stats.pop('faces')
         if cleaned.dtype == np.uint8:
             cleaned = repaired
         else:   # every change is inside the filled mask
@@ -222,7 +246,7 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         model_fill = {'model': 'MI-GAN (Picsart AI Research), an inpainting model',
                       'where': 'scratches, fibers and debris found by the scratch-detection model',
                       'pixels': n, 'share': round(n / (small.shape[0] * small.shape[1]), 6)}
-        steps.append({'step': 'scratches', **stats, 'faces': len(on), 'spare_long_lines': spare_long_lines,
+        steps.append({'step': 'scratches', **stats, 'faces': faces_on, 'spare_long_lines': spare_long_lines,
                       'method': 'found by a scratch-detection model (UNet), filled in by MI-GAN (OpenCV DNN)',
                       'models': {k: {'file': m['file'], 'sha256': m['sha256'], 'source': m['source']}
                                  for k, m in models.MODELS.items()}})
@@ -278,6 +302,8 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         # Only the damaged spots a model filled in, if any; everything else is the scan.
         'filled_in_by_model': model_fill, 'approved': False,
     }
+    if ck:   # stages an earlier, stopped run had finished, and where
+        record['resumed_from_checkpoints'] = ck.resumed
     recipe_path.write_text(json.dumps(record, indent=2) + '\n')
     return record
 

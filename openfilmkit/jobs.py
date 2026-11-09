@@ -5,7 +5,8 @@ A package is a folder named after its job ID:
   job.json   {'job': what to do, 'about': where it came from}
   input/     the file to work on (and its recipe, if it has one)
   out/       the result; its recipe is written last and marks the job done
-  work/      temporary files, safe to delete; a crashed run leaves its junk here
+  work/      temporary files, and checkpoints/: what the slow stages of an unfinished run had
+             worked out, so the next run, here or on another machine, goes on from there
 
 The job ID is the SHA-256 of job.json's 'job' part: the command, its options, the input's
 checksum, the OpenFilmKit version and the models' checksums. That is everything that decides the
@@ -16,7 +17,9 @@ path, the suggested output name, when and where it was packed) is kept but not h
 A job runs only on the OpenFilmKit version that packed it, since another version can give other
 pixels. Run results are written under temporary names and renamed into out/, the recipe last, so
 a run that stops partway leaves the job unfinished rather than half done, and two machines that
-run the same job end with the same file.
+run the same job end with the same file. A resumed run gives the same file as one that never
+stopped; the recipe says which stages were resumed, and from which machine. The checkpoints are
+deleted once the job is done.
 """
 import datetime
 import hashlib
@@ -71,6 +74,13 @@ def pack_clean(source, into, output=None, **options):
     `output` names the result (default: the name clean would give it beside the source); a
     .tif, .jpg or .png suffix there chooses the format. Returns the package's path; packing
     work that is already packed returns the existing package."""
+    source = Path(source).expanduser().resolve()
+    job, about = clean_job(source, output, **options)
+    return _write_package(Path(into).expanduser(), job, about, [source, Path(str(source) + '.json')])
+
+
+def clean_job(source, output=None, **options):
+    """(job, about) for `clean` of `source`; see pack_clean."""
     from . import clean
     source = Path(source).expanduser().resolve()
     if not source.is_file():
@@ -92,7 +102,27 @@ def pack_clean(source, into, output=None, **options):
         job['models'] = {k: m['sha256'] for k, m in models.MODELS.items()}
     about = {'source': str(source), 'output_name': name, 'input_name': source.name,
              'packed_utc': _now(), 'packed_on': socket.gethostname()}
-    return _write_package(Path(into).expanduser(), job, about, [source, Path(str(source) + '.json')])
+    return job, about
+
+
+CHECKPOINT_DAYS = 14
+
+
+def local_checkpoints(job):
+    """Where a clean run here keeps its stage checkpoints: a cache folder named after the job's
+    ID, so running the same command on the same photo again, after Ctrl-C or a machine that went
+    to sleep, picks up the slow work, and nothing else can. Folders left more than
+    CHECKPOINT_DAYS untouched are cleared away."""
+    base = Path(os.environ.get('OPENFILMKIT_CACHE') or Path.home() / '.cache' / 'openfilmkit') / 'checkpoints'
+    cutoff = datetime.datetime.now().timestamp() - CHECKPOINT_DAYS * 86400
+    if base.is_dir():
+        for old in base.iterdir():
+            try:
+                if old.is_dir() and old.stat().st_mtime < cutoff:
+                    shutil.rmtree(old, ignore_errors=True)
+            except OSError:
+                pass
+    return base / job_id(job)
 
 
 def _write_package(into, job, about, files):
@@ -178,7 +208,8 @@ def run(package, say=None):
     tmp.mkdir(parents=True)
     try:
         produced = tmp / about['output_name']
-        record = clean.clean(source, produced, say=say, **job['options'])
+        record = clean.clean(source, produced, say=say, checkpoints=package / 'work' / 'checkpoints',
+                             **job['options'])
         final = _result(package, about)
         record.update(source=about['source'], output=str(final))
         record['job'] = {'id': package.name, 'ran_on': socket.gethostname(), 'finished_utc': _now()}
@@ -186,6 +217,7 @@ def run(package, say=None):
         _write_json(Path(str(produced) + '.json'), record)
         os.replace(produced, final)
         os.replace(Path(str(produced) + '.json'), Path(str(final) + '.json'))   # last: the job is done
+        shutil.rmtree(package / 'work' / 'checkpoints', ignore_errors=True)
     except clean.CleanError as e:
         raise JobError(str(e)) from e
     finally:
@@ -223,5 +255,7 @@ def show(package):
     job, about = read(package)
     work = package / 'work'
     running = sorted(p.name for p in work.glob('run-*')) if work.is_dir() else []
-    state = 'done' if done(package) else ('started' if running else 'packed')
-    return {'id': package.name, 'state': state, 'runs_in_work': running, 'job': job, 'about': about}
+    saved = sorted(p.stem for p in (work / 'checkpoints').glob('*.npz')) if work.is_dir() else []
+    state = 'done' if done(package) else ('started' if running or saved else 'packed')
+    return {'id': package.name, 'state': state, 'runs_in_work': running, 'checkpoints': saved,
+            'job': job, 'about': about}

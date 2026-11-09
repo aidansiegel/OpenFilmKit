@@ -59,6 +59,10 @@ recipe beside it that says exactly how it was made.
     pixels in a copy cleaned with the same options (the crop comes out the same), R a radius
     (default 0.4 % of the short side). Repeat it for more spots; the recipe lists them.
   - On a roll folder, it cleans only conversions without a copy made with the same options.
+  - If `clean` is stopped partway (Ctrl-C, a machine that sleeps), running the same command again
+    picks up the slow work where it stopped, with the same result as an uninterrupted run. The
+    saved stages live in `~/.cache/openfilmkit/checkpoints` (or `$OPENFILMKIT_CACHE`) until the
+    photo is done, and are cleared after two weeks if it never is.
 
 ### Files you get
 
@@ -110,7 +114,15 @@ twice gives the same package, running a finished job again does nothing, and a r
 interrupted leaves the job unfinished, never half done, so it can simply be run again. A job runs
 only on the OpenFilmKit version that packed it, since another version can give different pixels.
 `job show` says whether a package is packed, started or done; recipes record the machine a job
-ran on. Running jobs over SSH and a shared queue for several machines are next (see ROADMAP.md).
+ran on.
+
+A stopped job keeps its slow work. The faces, crop and date stamp, the dust mask, the scratch
+model's probabilities, the scratch mask and every window MI-GAN has filled are saved in the
+package as they're finished (`work/checkpoints/`), so the next `job run`, on this machine or on
+whichever machine the package goes to, goes on from there. The result is the same, byte for byte,
+as a run that never stopped. The recipe lists the stages that were picked up and the machine that
+did them, and the checkpoints are deleted once the job is done. Running jobs over SSH and a shared
+queue for several machines are next (see ROADMAP.md).
 
 ## Scans from SilverFast or VueScan
 

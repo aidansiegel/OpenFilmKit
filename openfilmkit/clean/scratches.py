@@ -56,6 +56,15 @@ def load_nets(say=None):
 
 def scratch_probability(net, img):
     """Scratch probability (float32, 0..1) at full size for an RGB uint8 image."""
+    return full_size(model_probability(net, img), img.shape)
+
+
+def full_size(prob, shape):
+    return cv2.resize(prob, (shape[1], shape[0]), interpolation=cv2.INTER_LINEAR)
+
+
+def model_probability(net, img):
+    """Scratch probability at the size the model works at (DETECT_SIDE on the long side)."""
     h, w = img.shape[:2]
     s = DETECT_SIDE / max(h, w)
     gray = Image.fromarray(img).convert('L')   # PIL's gray and bicubic resize, as the pipeline had
@@ -72,7 +81,7 @@ def scratch_probability(net, img):
             p = net.forward()[0, 0]
             hh, ww = min(step, sh - y0), min(step, sw - x0)
             prob[y0:y0 + hh, x0:x0 + ww] = p[DETECT_PAD:DETECT_PAD + hh, DETECT_PAD:DETECT_PAD + ww]
-    return cv2.resize(prob, (w, h), interpolation=cv2.INTER_LINEAR)
+    return prob
 
 
 def fill_window(net):
@@ -382,10 +391,12 @@ def build_mask(img, prob, protect, faces, dust_mask=None, thr=0.4, face_thr=0.15
 
 # ---------------------------------------------------------------- fill
 
-def fill_damage(img, mask, run, tile=TILE, margin=MARGIN, max_passes=64):
+def fill_damage(img, mask, run, tile=TILE, margin=MARGIN, max_passes=64, journal=None):
     """Fill `mask` window by window around each piece of damage, largest first. `run(crop, keep)`
     returns the model's fill of `crop` (uint8 HxWx3) where `keep` (uint8 HxW) is 0. Every unfilled
     damaged pixel in a window is a hole at once, so a half-filled fleck is never context to copy.
+    `journal` (checkpoints.Journal) keeps what each window wrote; a later run replays those in
+    order, which leaves the same state, and goes on from the first window not saved.
     Returns (result, calls)."""
     h, w = mask.shape
     res = img.copy()
@@ -411,11 +422,20 @@ def fill_damage(img, mask, run, tile=TILE, margin=MARGIN, max_passes=64):
             inner = np.zeros_like(hole)
             inner[margin if y0 > 0 else 0:th - (margin if y0 + th < h else 0),
                   margin if x0 > 0 else 0:tw - (margin if x0 + tw < w else 0)] = True
-            r = run(crop, np.where(hole, 0, 255).astype(np.uint8))
             write = hole & inner
             if not (write & (lab[y0:y0 + th, x0:x0 + tw] == i)).any():
                 write = hole                     # this damage only in the margin: write it to progress
-            crop[write] = r[write]
+            saved = journal.get(calls) if journal else None
+            at = [int(y0), int(x0), int(th), int(tw)]
+            if saved and saved['info']['at'] == at and np.array_equal(saved['write'], write):
+                crop[write] = saved['values']
+            else:
+                if saved:
+                    journal.reject()
+                r = run(crop, np.where(hole, 0, 255).astype(np.uint8))
+                crop[write] = r[write]
+                if journal:
+                    journal.put(calls, info={'at': at}, write=write, values=r[write])
             todo[y0:y0 + th, x0:x0 + tw][write] = False
             calls += 1
     return res, calls
@@ -505,16 +525,38 @@ def match_grain(res, mask, sigma=1.2, block=48, smooth_ratio=0.75, min_area=200,
     return out, done
 
 
-def repair(img, faces, protect, dust_mask, load, spare_long_lines=False):
+def repair(img, faces, protect, dust_mask, load, spare_long_lines=False, checkpoints=None):
     """The whole pass on an RGB uint8 image: (result, stats, mask). Every change is inside mask.
-    `load`: load_nets()."""
-    prob = scratch_probability(load('scratch'), img)
-    mask, stats = build_mask(img, prob, protect, faces, dust_mask=dust_mask, spare_long_lines=spare_long_lines)
-    del prob
+    `load`: load_nets(). `checkpoints` (clean.checkpoints.Checkpoints) keeps the probabilities,
+    the mask and each filled window, so a stopped run resumes; with a saved mask, `faces` and
+    `protect` aren't needed (None). stats['faces'] is how many faces the mask was made with."""
+    ck = checkpoints
+    saved = ck.load('scratch_mask') if ck else None
+    if saved:
+        mask, stats = saved['mask'].astype(np.uint8), saved['info']['stats']
+    else:
+        got = ck.load('scratch_probability') if ck else None
+        small = got['prob'] if got else model_probability(load('scratch'), img)
+        if ck and not got:
+            ck.save('scratch_probability', prob=small)
+        prob = full_size(small, img.shape)
+        del small
+        mask, stats = build_mask(img, prob, protect, faces, dust_mask=dust_mask, spare_long_lines=spare_long_lines)
+        del prob
+        stats['faces'] = len(faces)
+        if ck:
+            ck.save('scratch_mask', mask=mask > 0, info={'stats': stats})
     if not mask.any():
         return img.copy(), dict(stats, model_calls=0, invented_replaced=0, spots_evened=0, grain_matched=0), mask
     telea = restore.inpaint(img, mask, 3)
-    res, calls = fill_damage(img, mask, fill_window(load('fill')))
+    net = []   # the fill model, read at its first window (none when every window is saved)
+
+    def run(crop, keep):
+        if not net:
+            net.append(fill_window(load('fill')))
+        return net[0](crop, keep)
+    res, calls = fill_damage(img, mask, run, journal=ck.journal('fill') if ck else None)
+    net.clear()
     res, settle = settle_fill(res, telea, mask, grow_for(img.shape))
     res, grained = match_grain(res, mask)
     return res, dict(stats, **settle, grain_matched=grained, model_calls=calls, pixels_filled=int(mask.sum())), mask

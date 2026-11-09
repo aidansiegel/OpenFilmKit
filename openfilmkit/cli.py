@@ -256,11 +256,15 @@ def cmd_clean(args, out):
                    scratches=args.scratches, spare_long_lines=args.spare_long_lines, spots=args.spot)
     if args.pack:
         return pack_clean(sources, args, options, out)
+    from . import jobs
     records = []
     for source in sources:
         try:
-            record = clean.clean(source, args.output, say=out.error, **options)
-        except clean.CleanError as e:
+            # Stage checkpoints, so stopping partway (Ctrl-C, sleep) keeps the slow work for a rerun.
+            ck = jobs.local_checkpoints(jobs.clean_job(source, args.output, **options)[0])
+            record = clean.clean(source, args.output, say=out.error, checkpoints=ck, **options)
+            shutil.rmtree(ck, ignore_errors=True)
+        except (clean.CleanError, jobs.JobError) as e:
             out.error(f'openfilmkit: {source}: {e}')
             records.append({'source': str(source), 'error': str(e)})
             continue
