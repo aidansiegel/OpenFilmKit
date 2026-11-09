@@ -1,10 +1,13 @@
-"""clean on a real photograph: it must leave an undamaged portrait alone, and find damage we add.
+"""clean on real photographs: leave an undamaged portrait alone, and find real and added damage.
 
-The photo is Sally Ride's 1984 NASA portrait (public domain): film-era, with fine hair, fabric and
-a flag, the detail a cleaner is tempted to take for dust. The damage is added here, with known
-positions, the way debris on a negative prints: bright, soft-edged specks, curled fibers and a
-long thin scratch. The scratch-pass tests need the models (openfilmkit models --fetch) and are
-skipped without them.
+Sally Ride's 1984 NASA portrait (public domain) is film-era, with fine hair, fabric and a flag,
+the detail a cleaner is tempted to take for dust. Damage is added to it with known positions, the
+way debris on a negative prints: bright, soft-edged specks, curled fibers and a long scratch.
+
+Grace Hopper's 1984 Navy portrait (public domain) carries genuine dust of its own, and on top of
+it goes real dust from a scan of blank film (tests/fixtures/README.md), printed as a negative
+prints it. The scratch-pass tests need the models (openfilmkit models --fetch) and are skipped
+without them.
 """
 import sys
 import tempfile
@@ -22,8 +25,10 @@ try:
 except ImportError:
     clean = None
 
-# Sally K. Ride, NASA photo S84-37256 (June 1984), public domain: https://images.nasa.gov/details/S84-37256
-RIDE = Path(__file__).resolve().parent / 'fixtures' / 'sally-ride-1984.jpg'
+FIXTURES = Path(__file__).resolve().parent / 'fixtures'
+RIDE = FIXTURES / 'sally-ride-1984.jpg'            # see fixtures/README.md for sources and rights
+HOPPER = FIXTURES / 'grace-hopper-1984.jpg'
+FILM_DUST = FIXTURES / 'blank-film-dust.png'
 
 
 def have_models():
@@ -212,6 +217,87 @@ class Portrait(unittest.TestCase):
         dam = dam.astype(np.uint8)
         _, _, mask = sc.repair(dam, self.faces, self.stamp, restore.dust_mask, sc.load_nets())
         self.assertGreaterEqual(sum((mask > 0)[s].mean() >= 0.5 for s in spots), 9)
+
+
+def print_dust(img, opacity, contrast=2.6):
+    """Debris on a negative as it prints: the negative loses `opacity` of its light there, and the
+    print raises that loss to the print contrast, in linear light, so the positive brightens."""
+    f = img.astype(np.float32) / 255
+    lin = np.where(f <= 0.04045, f / 12.92, ((f + 0.055) / 1.055) ** 2.4)
+    lin = np.clip(lin * np.clip(1 - opacity, 0.05, 1)[..., None] ** -contrast, 0, 1)
+    out = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1 / 2.4) - 0.055)
+    return np.rint(out * 255).astype(np.uint8)
+
+
+def bright_specks(img, region):
+    """Small bright specks in `region`, counted independently of clean: a top-hat over 7 px."""
+    g = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    hat = cv2.morphologyEx(g, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+    return cv2.connectedComponents(((hat > 30) & region).astype(np.uint8))[0] - 1
+
+
+@unittest.skipIf(clean is None, 'needs OpenCV, numpy and Pillow')
+class HopperPortrait(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.img = np.asarray(Image.open(HOPPER).convert('RGB'))
+        cls.faces = clean.find_faces(cls.img)
+        cls.protect = restore.stamp_mask(cls.img) | restore.feature_mask(cls.img.shape, cls.faces)
+        cls.dust = np.asarray(Image.open(FILM_DUST)).astype(np.float32) / 255
+        cls.damaged = print_dust(cls.img, cls.dust)
+        lift = np.abs(cls.damaged.astype(int) - cls.img).max(axis=2)
+        n, lab = cv2.connectedComponents((lift >= 12).astype(np.uint8))
+        cls.pieces = [(lab == i, int(lift[lab == i].max())) for i in range(1, n)]   # visible dust, and how bright
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def cleaned(self):
+        src = self.root / 'dusty.png'
+        Image.fromarray(self.damaged).save(src)
+        return np.asarray(Image.open(clean.clean(src, crop=False, scratches=True)['output']).convert('RGB'))
+
+    def test_her_face_is_found_at_every_rotation(self):
+        for turns in range(4):
+            self.assertEqual(len(clean.find_faces(np.ascontiguousarray(np.rot90(self.img, turns)))), 1, turns)
+
+    def test_the_portraits_own_dust_is_cleaned(self):
+        # White specks on her dark uniform: dust on the 1984 original (or lint on the wool).
+        uniform = cv2.cvtColor(self.img, cv2.COLOR_RGB2GRAY) < 60
+        before = bright_specks(self.img, uniform)
+        mask = restore.dust_mask(self.img, protect=self.protect)
+        after = bright_specks(restore.remove_dust(self.img, mask), uniform)
+        # The count also takes in real highlights (buttons, insignia, weave), which must stay:
+        # about 150 before, about 60 after.
+        self.assertGreater(before, 100)
+        self.assertLess(after, 0.5 * before)
+        self.assertLess(int(mask[sc.skin_area(self.img, self.faces)].sum()), 30)   # her face is left alone
+
+    def test_the_film_dust_is_real_and_visible(self):
+        self.assertGreaterEqual(len(self.pieces), 15)
+        self.assertGreaterEqual(sum(lift >= 30 for _, lift in self.pieces), 5)
+
+    @unittest.skipUnless(have_models(), 'needs the scratch models (openfilmkit models --fetch)')
+    def test_cleaning_the_film_dust_does_no_harm(self):
+        out = self.cleaned()
+        spots = np.any([m for m, _ in self.pieces], axis=0)
+        before = np.abs(self.damaged[spots].astype(int) - self.img[spots]).mean()
+        self.assertLessEqual(np.abs(out[spots].astype(int) - self.img[spots]).mean(), before)
+
+    @unittest.expectedFailure
+    @unittest.skipUnless(have_models(), 'needs the scratch models (openfilmkit models --fetch)')
+    def test_clearly_visible_soft_dust_is_found(self):
+        # Known gap (Nov 2026): this scan's dust is soft, out-of-focus blobs. Of the 7 pieces at
+        # least 30 levels brighter than the photo, clean finds 3: the dust pass wants small sharp
+        # specks, and the scratch model was trained on scratches. When this passes, remove the marker.
+        out = self.cleaned()
+        changed = np.abs(out.astype(int) - self.damaged).max(axis=2) > 0
+        clear = [m for m, lift in self.pieces if lift >= 30]
+        self.assertGreaterEqual(sum(changed[m].mean() >= 0.5 for m in clear), len(clear) - 1)
 
 
 if __name__ == '__main__':

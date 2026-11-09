@@ -115,8 +115,10 @@ descriptors, so settings meant for one hardware revision are never used on anoth
 - Face detection: YuNet (Shiqi Yu and others), `face_detection_yunet_2023mar.onnx` from the
   [OpenCV Zoo](https://github.com/opencv/opencv_zoo), MIT license
   (`openfilmkit/data/face_detection_yunet_LICENSE`), run through OpenCV.
-- Test photo: Sally K. Ride, NASA photo S84-37256 (1984), public domain; the tests check that
-  `clean` leaves it alone and finds damage added to it.
+- Test photos: Sally K. Ride (NASA S84-37256, 1984) and Grace M. Hopper (U.S. Navy NH 96919-KN,
+  1984), both public domain, and real dust from a scan of blank film (CC0); the tests check that
+  `clean` leaves an undamaged portrait alone and finds real and added damage. Sources in
+  `tests/fixtures/README.md`.
 - Scanner and model tables: generated from [SANE](http://www.sane-project.org/) (sane-backends,
   GPL-2.0-or-later with the SANE exception) at the commit in `packaging/sane-pin.json`.
 
