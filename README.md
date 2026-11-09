@@ -143,16 +143,27 @@ queue = "server:openfilmkit-queue"   # host:path, or a local path
 queue = "server:openfilmkit-queue"
 memory_gb = 2.5                      # largest job it takes (and only if the machine has it free)
 hours = "22-7"                       # start jobs only overnight (optional)
+yield_to = "photo-worker.service"    # make way while this service is using memory (optional)
 ```
 
-A worker takes the oldest job it can do: packed by its OpenFilmKit version, an estimated memory
-need it can meet, inside its hours. It claims the job and renews the claim every two minutes; a
-claim not renewed for ten minutes lapses, and the next worker starts from the slow stages the
-last one pushed (the scratch model's results and every filled window), so a machine that dies or
-is switched off loses at most a few minutes of work. Workers only ever use rsync: each reads the
-queue and writes only its own `drop/<name>/` folder, so it can have an SSH key restricted to that
-(with `rrsync`). Collecting checks every result against its recipe and job before taking it;
-one that doesn't check out is deleted, and the job runs again.
+A worker takes the oldest job it can do: packed by the same OpenFilmKit code, an estimated memory
+need it can meet, inside its hours, and not while a service named in `yield_to` is busy (if one
+gets busy mid-job, the worker stops and comes back to it). It claims the job and renews the claim
+every two minutes; a claim not renewed for ten minutes lapses, and the next worker starts from
+the slow stages the last one pushed (the scratch model's results and every filled window), so a
+machine that dies or is switched off loses at most a few minutes of work. A worker that can't
+renew its claim stops rather than finish work another may have taken.
+
+Claims keep workers out of each other's way but can't rule out two doing the same job (nothing
+rsync does is atomic, and clocks differ). That's harmless by design: a job gives the same file
+wherever it runs, and collecting keeps the first result that checks out.
+
+Workers only ever use rsync: each reads the queue and writes only its own `drop/<name>/` folder,
+so it can have an SSH key restricted to that (with `rrsync`), and it clears its own folder once a
+job has been collected. Collecting checks every result against its recipe and job before taking
+it; one that doesn't check out is deleted (or marked rejected, where collecting may not delete
+it), and the job runs again. Results go back beside the originals only for jobs packed on the
+machine collecting them; for others, `queue collect --to DIR`.
 
 ### Job packages
 
@@ -168,10 +179,12 @@ openfilmkit job collect jobs/<id>         # result and recipe, beside the origin
 ```
 
 A package is named after its job ID, a checksum of everything that decides the result: the
-command, the options, the photo, the OpenFilmKit version and the models. Packing the same work
-twice gives the same package, running a finished job again does nothing, and a run that's
+command, the options, the photo, the OpenFilmKit version and build (a fingerprint of its code,
+which tells development versions apart) and the models. Packing the same work twice gives the
+same package, and the same photo from two folders is one job whose result goes back to both, running a finished job again does nothing, and a run that's
 interrupted leaves the job unfinished, never half done, so it can simply be run again. A job runs
-only on the OpenFilmKit version that packed it, since another version can give different pixels.
+only on the OpenFilmKit code that packed it, since other code can give different pixels
+(`openfilmkit job build` shows a machine's build).
 `job show` says whether a package is packed, started or done; recipes record the machine a job
 ran on.
 

@@ -11,18 +11,28 @@ queue and writing its own drop folder.
   drop/<worker>/checkpoints/<id>/  the slow stages of a job under way, pushed as they finish
   drop/<worker>/results/<id>/out/  a finished result, its recipe last
   drop/<worker>/failed/<id>.json   a job that failed there, and why
+  jobs/<id>/rejected.json          results collecting turned down (when it couldn't delete them)
 
-A worker picks the oldest job it can do: the version that packed it, an estimated peak memory
+A worker picks the oldest job it can do: the build that packed it, an estimated peak memory
 within its limit (and what the machine has free), inside its working hours, not done, and with no
-live claim by another worker. It writes a claim, waits SETTLE seconds and looks again; if
-another worker claimed the same job, the earlier claim wins (then the worker's name) and the other
-backs off. A job whose worker stopped renewing its claim is free again, and the next worker
-starts from the checkpoints the last one pushed, so the work isn't lost. Should two workers ever
-finish the same job, collecting keeps the first result that checks out.
+live claim by another worker. It writes a claim, waits SETTLE seconds and looks again; if another
+worker claimed the same job, the earlier claim wins (then the worker's name) and the other backs
+off. A job whose worker stopped renewing its claim is free again, and the next worker starts from
+the checkpoints the last one pushed, so the work isn't lost. A worker that can't renew its claim
+for a whole LEASE stops the job, and one that finds a good result already there doesn't publish
+its own.
 
-Collecting runs where the photos are, with full SSH access to the queue's machine: each result is
-checked against its recipe and its job before it's put beside the original, and the job's files
-are then cleared from the queue. A result that doesn't check out is deleted, which frees the job.
+Claims keep workers out of each other's way; they can't make two runs of one job impossible
+(rsync offers nothing atomic, and the machines' clocks may differ a little). That's safe by
+design: a job gives the same file wherever it runs, each worker writes only its own drop folder,
+and collecting keeps the first result that checks out. The worst case is a job done twice.
+
+Collecting runs where the photos are, with SSH access to the queue's machine: each result is
+checked against its recipe and its job before it's put beside each original, and the job is then
+cleared from the queue (workers clear their own drop folders once a job is gone). A result that
+doesn't check out is deleted or, where collecting may not delete it, marked rejected, and the job
+runs again. Only jobs packed on this machine are put back beside their originals; others go to a
+folder named with --to.
 """
 import json
 import os
@@ -38,7 +48,7 @@ from pathlib import Path
 from . import __version__, jobs
 from .remote import config_file
 
-LEASE, RENEW, SETTLE, POLL = 600, 120, 5, 60
+LEASE, RENEW, SETTLE, POLL, CHECK = 600, 120, 5, 60, 15
 NAME = re.compile(r'^[A-Za-z0-9._-]+$')
 JOB_ID = re.compile(r'^[0-9a-f]{64}$')
 SLOW_STAGES = ('scratch_probability.npz', 'fill-*.npz')   # worth pushing; the rest is quick to redo
@@ -46,6 +56,11 @@ SLOW_STAGES = ('scratch_probability.npz', 'fill-*.npz')   # worth pushing; the r
 
 class QueueError(Exception):
     pass
+
+
+class Interrupted(Exception):
+    """A job stopped for a reason of the worker's own (another program needs the memory, or the
+    claim was lost): its slow work is pushed and the job left for later."""
 
 
 def _config():
@@ -117,10 +132,14 @@ class View:
         folder = Path(folder)
         self.jobs, self.workers, self.leases, self.results, self.failed, self.checkpoints = {}, {}, {}, {}, {}, {}
         self.drops = []   # every worker with a drop folder
+        self.rejected = {}   # {job: [(worker, when that run finished)]}
         for p in sorted((folder / 'jobs').glob('*/job.json')):
             data = _read_json(p)
             if data and JOB_ID.match(p.parent.name):
                 self.jobs[p.parent.name] = (data['job'], data['about'])
+                turned_down = _read_json(p.parent / 'rejected.json') or []
+                self.rejected[p.parent.name] = [(r.get('worker'), r.get('finished_utc')) for r in turned_down]
+        self.mine = {}       # {worker: {kind: [job]}}: what each drop folder holds
         for w in sorted((folder / 'drop').glob('*')):
             if not NAME.match(w.name):
                 continue
@@ -132,12 +151,21 @@ class View:
                 lease = _read_json(p)
                 if lease:
                     self.leases.setdefault(p.stem, []).append(dict(lease, worker=w.name))
+            held = self.mine.setdefault(w.name, {'results': [], 'checkpoints': [], 'failed': [], 'rejected': []})
             for p in (w / 'results').glob('*/out/*.json'):
-                self.results.setdefault(p.parent.parent.name, []).append(w.name)
+                jid = p.parent.parent.name
+                held['results'].append(jid)
+                recipe = _read_json(p) or {}
+                if (w.name, recipe.get('job', {}).get('finished_utc')) in self.rejected.get(jid, []):
+                    held['rejected'].append(jid)
+                else:
+                    self.results.setdefault(jid, []).append(w.name)
             for p in (w / 'failed').glob('*.json'):
+                held['failed'].append(p.stem)
                 self.failed.setdefault(p.stem, []).append(dict(_read_json(p) or {}, worker=w.name))
             for p in (w / 'checkpoints').glob('*'):
                 if p.is_dir():
+                    held['checkpoints'].append(p.name)
                     self.checkpoints.setdefault(p.name, []).append(w.name)
 
     def live_leases(self, job_id, now):
@@ -150,6 +178,7 @@ def pull_view(spec, ssh_command, folder):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     ok = _rsync(ssh_command, '--delete', '--include=/jobs/', '--include=/jobs/*/', '--include=/jobs/*/job.json',
+                '--include=/jobs/*/rejected.json',
                 '--include=/drop/', '--include=/drop/*/', '--include=/drop/*/worker.json',
                 '--include=/drop/*/leases/', '--include=/drop/*/leases/*.json',
                 '--include=/drop/*/failed/', '--include=/drop/*/failed/*.json',
@@ -184,10 +213,33 @@ def _path(q, *parts):
     return '/'.join([_split(q['queue'])[1].rstrip('/'), *parts])
 
 
+def _free_bytes(q):
+    """Free space where the queue is, or None if it can't be read."""
+    host, path = _split(q['queue'])
+    command = ['df', '-Pk', path]
+    try:
+        if host is None:
+            out = subprocess.run(command, capture_output=True, text=True).stdout
+        else:
+            out = subprocess.run(shlex.split(q['ssh_command']) + [host, shlex.join(command)],
+                                 capture_output=True, text=True).stdout
+        return int(out.splitlines()[-1].split()[3]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+SPARE = 2 * 1024 ** 3   # what submitting leaves free on the queue's machine
+
+
 def submit(q, packages, say=print):
-    """Put local job packages into the queue."""
+    """Put local job packages into the queue, if they fit on its machine with SPARE left over."""
     if not _remote(q, 'mkdir', '-p', _path(q, 'jobs'), _path(q, 'drop')):
         raise QueueError(f"couldn't reach the queue at {q['queue']}")
+    need = sum(f.stat().st_size for p in packages for f in Path(p).rglob('*') if f.is_file())
+    free = _free_bytes(q)
+    if free is not None and need > free - SPARE:
+        raise QueueError(f"these jobs need {need / 1e9:.1f} GB and the queue's machine has {free / 1e9:.1f} GB free; "
+                         f'queue fewer at a time (collected jobs free their space)')
     if not _rsync(q['ssh_command'], *[str(Path(p)) for p in packages], f"{q['queue'].rstrip('/')}/jobs/"):
         raise QueueError(f"couldn't copy the jobs to {q['queue']}")
     say(f"Queued {len(packages)} job{'s' if len(packages) != 1 else ''} on {q['name']}.")
@@ -219,6 +271,18 @@ def status(q, now=None):
     return {'queue': q['name'], 'jobs': rows, 'workers': workers}
 
 
+def _reject(q, view, jid, worker, package):
+    """Mark a worker's result for a job as turned down, where collecting may not delete it (the
+    worker clears it, and the job runs again)."""
+    recipe = next((package / 'out').glob('*.json'), None)
+    run = (_read_json(recipe) or {}).get('job', {}).get('finished_utc') if recipe else None   # that run alone
+    turned_down = [{'worker': w, 'finished_utc': f} for w, f in view.rejected.get(jid, [])]
+    turned_down.append({'worker': worker, 'finished_utc': run})
+    note = _cache() / 'queues' / q['name'] / 'rejected' / jid / 'rejected.json'
+    _write_json(note, turned_down)
+    _rsync(q['ssh_command'], str(note), f"{q['queue'].rstrip('/')}/jobs/{jid}/", quiet=True)
+
+
 def collect(q, to=None, say=print):
     """Bring back every finished job: check it, put it beside the original (or into `to`), and
     clear it from the queue. Returns [recipe or {'id', 'error'}]."""
@@ -229,7 +293,12 @@ def collect(q, to=None, say=print):
         if jid not in view.jobs:
             continue
         package = box / jid
-        if not (package / 'job.json').is_file():   # submitted from somewhere else: its description will do
+        if not (package / 'job.json').is_file():
+            # Packed on another machine: its job.json says where the result should go, and that's
+            # not for a stranger to choose. Its description will do, sent where we're told.
+            if to is None:
+                out.append({'id': jid, 'error': 'packed on another machine: collect it with --to DIR'})
+                continue
             (package / 'out').mkdir(parents=True, exist_ok=True)
             _rsync(q['ssh_command'], f"{q['queue'].rstrip('/')}/jobs/{jid}/job.json", f'{package}/', quiet=True)
         record = None
@@ -243,23 +312,27 @@ def collect(q, to=None, say=print):
                     and candidate.get('source_sha256') == view.jobs[jid][0]['input']['sha256']:
                 record = candidate
                 break
-            say(f'{jid[:12]}: the result from {worker} does not check out; deleting it')
-            _remote(q, 'rm', '-rf', '--', _path(q, 'drop', worker, 'results', jid))
+            say(f'{jid[:12]}: the result from {worker} does not check out; turning it down')
+            if not _remote(q, 'rm', '-rf', '--', _path(q, 'drop', worker, 'results', jid)):
+                _reject(q, view, jid, worker, package)
         if record is None:
             out.append({'id': jid, 'error': 'no result checked out; the job is free to run again'})
             continue
         try:
-            record = jobs.collect(package, to)
+            records = jobs.collect(package, to)   # one per destination
         except jobs.JobError as e:
             out.append({'id': jid, 'error': str(e)})
             continue
-        paths = [_path(q, 'jobs', jid)] + [_path(q, 'drop', w, sub, jid) for w in view.drops
-                                           for sub in ('results', 'checkpoints')]
+        _remote(q, 'rm', '-rf', '--', _path(q, 'jobs', jid))
+        # The workers' files, where collecting may delete them (otherwise each worker clears its own).
+        paths = [_path(q, 'drop', w, sub, jid) for w in view.drops for sub in ('results', 'checkpoints')]
         paths += [_path(q, 'drop', w, 'failed', f'{jid}.json') for w in view.drops]
-        _remote(q, 'rm', '-rf', '--', *paths)
+        if paths:
+            _remote(q, 'rm', '-rf', '--', *paths)
         shutil.rmtree(package, ignore_errors=True)
-        say(f"{jid[:12]}: {Path(record['output']).name} (from {record.get('job', {}).get('ran_on')})")
-        out.append(record)
+        for record in records:
+            say(f"{jid[:12]}: {record['output']} (from {record.get('job', {}).get('ran_on')})")
+        out += records
     return out
 
 
@@ -268,7 +341,8 @@ def collect(q, to=None, say=print):
 def worker_settings(**given):
     """The worker's settings: hosts.toml's [worker] table, then `given` (from the command line)."""
     s = {'name': socket.gethostname().split('.')[0], 'ssh_command': 'ssh', 'memory_gb': 2.5, 'hours': None,
-         'lease': LEASE, 'renew': RENEW, 'settle': SETTLE, 'poll': POLL}
+         'lease': LEASE, 'renew': RENEW, 'settle': SETTLE, 'poll': POLL, 'check': CHECK,
+         'yield_to': [], 'yield_mb': 300}
     s.update(_config().get('worker', {}))
     s.update({k: v for k, v in given.items() if v is not None})
     if not s.get('queue'):
@@ -278,7 +352,24 @@ def worker_settings(**given):
     s.setdefault('drop', f"{s['queue'].rstrip('/')}/drop/{s['name']}")
     s['state'] = Path(s.get('state') or _cache() / 'worker')
     s['memory_gb'] = float(s['memory_gb'])
+    if isinstance(s['yield_to'], str):
+        s['yield_to'] = [s['yield_to']]
     return s
+
+
+def busy(units, over_mb):
+    """The first of these systemd units using more than `over_mb` MB of memory, or None: another
+    program at work that a job here would compete with for memory."""
+    for unit in units:
+        try:
+            r = subprocess.run(['systemctl', 'show', '--property=MemoryCurrent', '--value', unit],
+                               capture_output=True, text=True, timeout=10)
+            used = int(r.stdout.strip())
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            continue   # not running, not systemd, or no figure ("[not set]")
+        if used > over_mb * 1024 * 1024:
+            return unit
+    return None
 
 
 def in_hours(hours, at=None):
@@ -328,17 +419,19 @@ class Worker:
         self.state = settings['state']
         self.mirror = self.state / 'drop'         # what this worker writes, pushed to its drop folder
         self.current = None
+        self._pushed = True
 
     # -- writing to the drop folder
     def _push(self):
         ok = _rsync(self.s['ssh_command'], '--exclude=.*', f'{self.mirror}/', f"{self.s['drop']}/", quiet=True)
         ok &= _rsync(self.s['ssh_command'], '--delete', '--exclude=.*', f'{self.mirror}/leases/',
                      f"{self.s['drop']}/leases/", quiet=True)
+        self._pushed = ok
         return ok
 
     def publish(self):
         _write_json(self.mirror / 'worker.json', {
-            'name': self.s['name'], 'version': __version__, 'memory_gb': self.s['memory_gb'],
+            'name': self.s['name'], 'version': __version__, 'build': jobs.build(), 'memory_gb': self.s['memory_gb'],
             'hours': self.s['hours'], 'seen': self.now(), 'running': self.current})
         (self.mirror / 'leases').mkdir(parents=True, exist_ok=True)
         self._push()
@@ -356,7 +449,8 @@ class Worker:
         out = []
         for jid, (job, about) in view.jobs.items():
             need = jobs.memory_needed(job, about)
-            if jid in view.results or jid in mine or job.get('openfilmkit') != __version__:
+            if jid in view.results or jid in mine or job.get('openfilmkit') != __version__ \
+                    or job.get('build') != jobs.build():
                 continue
             if need > self.s['memory_gb'] or (free is not None and need > free):
                 continue
@@ -364,6 +458,24 @@ class Worker:
                 continue
             out.append((about.get('packed_utc', ''), jid))
         return [jid for _, jid in sorted(out)]
+
+    def tidy(self, view):
+        """Clear this worker's drop folder of jobs that are gone from the queue (collected) and of
+        its results that collecting turned down."""
+        held = view.mine.get(self.s['name'], {})
+        gone = {jid for kind in ('results', 'checkpoints', 'failed') for jid in held.get(kind, [])
+                if jid not in view.jobs}
+        refused = set(held.get('rejected', []))
+        if not gone | refused:
+            return
+        empty = self.state / 'empty'
+        empty.mkdir(parents=True, exist_ok=True)
+        for kind in ('results', 'checkpoints', 'failed'):
+            names = []
+            for jid in sorted(gone | (refused if kind == 'results' else set())):
+                names += [f'--include=/{jid}.json'] if kind == 'failed' else [f'--include=/{jid}/', f'--include=/{jid}/**']
+            _rsync(self.s['ssh_command'], '-r', '--delete', *names, '--exclude=*', f'{empty}/',
+                   f"{self.s['drop']}/{kind}/", quiet=True)
 
     def _lease(self, jid, claimed=None):
         now = self.now()
@@ -428,12 +540,29 @@ class Worker:
         self.current = jid
         self.publish()
 
-        def beat():
-            self._lease(jid)
-            self._push_checkpoints(jid, package)
-            self.publish()
+        renewed = {'at': self.now(), 'ok': self.now()}
+
+        def beat():   # every `check` seconds while the job runs
+            other = busy(self.s['yield_to'], self.s['yield_mb'])
+            if other:
+                raise Interrupted(f'{other} is at work')
+            if self.now() - renewed['at'] >= self.s['renew']:
+                renewed['at'] = self.now()
+                self._lease(jid)
+                self._push_checkpoints(jid, package)
+                self.publish()
+                if self._pushed:
+                    renewed['ok'] = self.now()
+                elif self.now() - renewed['ok'] > self.s['lease']:
+                    raise Interrupted("couldn't renew the claim for a whole lease; another worker may have it")
         try:
-            self.run(package, beat, self.s['renew'])
+            self.run(package, beat, self.s['check'])
+        except Interrupted as e:
+            self.say(f'{jid[:12]}: stopped: {e}')
+            self._push_checkpoints(jid, package)
+            self.current = None
+            self.release(jid)
+            return False
         except jobs.JobError as e:
             self.say(f'{jid[:12]}: failed: {e}')
             _write_json(self.mirror / 'failed' / f'{jid}.json', {'job': jid, 'error': str(e), 'at': self.now()})
@@ -445,6 +574,12 @@ class Worker:
             self.current = None
             self.release(jid)
             raise
+        if jid in self.view().results:   # another worker got there first (claims are advisory)
+            self.say(f'{jid[:12]}: already done elsewhere; keeping the first result')
+            self.current = None
+            self.release(jid)
+            shutil.rmtree(package, ignore_errors=True)
+            return False
         result = self.mirror / 'results' / jid / 'out'
         result.mkdir(parents=True, exist_ok=True)
         for f in sorted((package / 'out').iterdir()):   # the image, then its recipe
@@ -464,6 +599,11 @@ class Worker:
         if not in_hours(self.s['hours'], self.now()):
             return None
         view = self.view()
+        self.tidy(view)
+        other = busy(self.s['yield_to'], self.s['yield_mb'])
+        if other:
+            self.say(f'waiting: {other} is at work')
+            return None
         for jid in self.candidates(view):
             if self.claim(jid):
                 self.say(f'{jid[:12]}: {view.jobs[jid][1].get("output_name")}')

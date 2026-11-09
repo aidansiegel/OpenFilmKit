@@ -90,6 +90,37 @@ class Jobs(unittest.TestCase):
         jobs.run(package)
         self.assertIsNotNone(jobs.done(package))
 
+    def test_the_same_photo_in_two_folders_is_one_job_and_both_get_the_result(self):
+        twin = self.root / 'copies' / 'frame-v1-twin.png'
+        twin.parent.mkdir()
+        shutil.copyfile(self.src, twin)
+        a, b = self.pack(), self.pack(twin)
+        self.assertEqual(a, b)
+        jobs.run(a)
+        records = jobs.collect(a)
+        self.assertEqual(sorted(r['output'] for r in records),
+                         sorted([str(self.root / 'photos' / 'frame-v1-clean-v1.png'),
+                                 str(self.root / 'copies' / 'frame-v1-twin-clean-v1.png')]))
+        self.assertEqual({r['source'] for r in records}, {str(self.src), str(twin)})
+        for r in records:
+            self.assertEqual(jobs.sha(r['output']), r['output_sha256'])
+
+    def test_a_package_naming_files_outside_itself_is_refused(self):
+        package = self.pack()
+        data = json.loads((package / 'job.json').read_text())
+        for field, bad in (('input_name', '../../etc/passwd'), ('output_name', '../escape.png')):
+            tampered = json.loads(json.dumps(data))
+            tampered['about'][field] = bad
+            (package / 'job.json').write_text(json.dumps(tampered))
+            with self.assertRaisesRegex(jobs.JobError, 'outside'):
+                jobs.read(package)
+
+    def test_a_job_runs_only_on_the_build_that_packed_it(self):
+        package = self.pack()
+        with mock.patch.object(jobs, 'build', lambda: '0' * 16):              # same version, other code
+            with self.assertRaisesRegex(jobs.JobError, 'other OpenFilmKit'):
+                jobs.run(package)
+
     def test_a_job_runs_only_on_the_version_that_packed_it(self):
         package = self.pack()
         with mock.patch.object(jobs, '__version__', '9.9.9'):
@@ -120,12 +151,12 @@ class Jobs(unittest.TestCase):
         with self.assertRaisesRegex(jobs.JobError, 'not finished'):
             jobs.collect(package)
         jobs.run(package)
-        record = jobs.collect(package)
+        (record,) = jobs.collect(package)
         dest = self.root / 'photos' / 'frame-v1-clean-v1.png'
         self.assertEqual(record['output'], str(dest))
         self.assertEqual(jobs.sha(dest), record['output_sha256'])
         self.assertEqual(json.loads(Path(str(dest) + '.json').read_text())['output'], str(dest))
-        self.assertEqual(jobs.collect(package)['output'], str(dest))          # again: harmless
+        self.assertEqual(jobs.collect(package)[0]['output'], str(dest))       # again: harmless
         other = self.root / 'other'
         other.mkdir()
         (other / 'frame-v1-clean-v1.png').write_bytes(b'something else')
@@ -146,13 +177,15 @@ class Jobs(unittest.TestCase):
             return code, json.loads(out.getvalue())
         code, packed = ofk('clean', str(r), '--no-faces', '--pack', str(self.queue))
         self.assertEqual((code, len(packed)), (0, 2))
-        self.assertEqual(packed[0]['id'], packed[1]['id'])                   # identical frames: one job
+        self.assertEqual(packed[0]['id'], packed[1]['id'])                   # identical frames: one job...
         code, ran = ofk('job', 'run', *[p['package'] for p in packed])
         self.assertEqual((code, len(ran)), (0, 2))
         code, info = ofk('job', 'show', packed[0]['package'])
         self.assertEqual(info['state'], 'done')
-        code, record = ofk('job', 'collect', packed[1]['package'], '--to', str(self.root / 'back'))
-        self.assertTrue(Path(record['output']).is_file())
+        code, records = ofk('job', 'collect', packed[1]['package'])
+        self.assertEqual(sorted(Path(r['output']).name for r in records),    # ...and both frames get it
+                         ['frame-01-v1-clean-v1.png', 'frame-02-v1-clean-v1.png'])
+        self.assertTrue(all(Path(r['output']).is_file() for r in records))
 
 
 if __name__ == '__main__':

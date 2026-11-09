@@ -307,10 +307,16 @@ def pack_clean(sources, args, options, out):
         ready = [p['package'] for p in packed if 'error' not in p]
         to = Path(args.output).expanduser().resolve().parent if args.output else None
         try:
-            done = iter(remote.run_on(args.on, ready, to=to, keep=args.keep_remote, say=out.say))
+            results = remote.run_on(args.on, ready, to=to, keep=args.keep_remote, say=out.say)
         except remote.RemoteError as e:
             raise Fail(str(e))
-        packed = [p if 'error' in p else next(done) for p in packed]
+
+        def mine(p):   # this photo's own destination among the job's
+            got = results[p['package']]
+            if isinstance(got, dict):
+                return dict(got, source=p['source'])
+            return next((r for r in got if r['source'] == p['source']), got[0])
+        packed = [p if 'error' in p else mine(p) for p in packed]
         for rec in packed:
             if 'error' in rec:
                 out.error(f"openfilmkit: {rec.get('source') or rec.get('package')}: {rec['error']}")
@@ -335,9 +341,14 @@ def cmd_job(args, out):
             out.result({'removed': args.packages})
             return 0
         if args.job_command == 'collect':
-            record = jobs.collect(args.package, args.to)
-            out.say(f"Collected {record['output']}")
-            out.result(record)
+            records = jobs.collect(args.package, args.to)
+            for record in records:
+                out.say(f"Collected {record['output']}")
+            out.result(records)
+            return 0
+        if args.job_command == 'build':
+            out.say(jobs.build())
+            out.result({'version': __version__, 'build': jobs.build()})
             return 0
     except jobs.JobError as e:
         raise Fail(str(e))
@@ -605,6 +616,7 @@ def parser():
     s.add_argument('--hours', metavar='START-END', help='only start jobs in these hours, e.g. 22-7')
     s.add_argument('--ssh-command', help='ssh command for rsync, e.g. "ssh -i ~/.ssh/queue_key"')
     s.add_argument('--once', action='store_true', help='do at most one job, then stop')
+    s = j.add_parser('build', parents=[common], help="this OpenFilmKit's build: a fingerprint of its code")
     s = j.add_parser('remove', parents=[common], help='delete job packages (checked to be packages first)')
     s.add_argument('packages', nargs='+')
 

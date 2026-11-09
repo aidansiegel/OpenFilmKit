@@ -6,7 +6,7 @@ MI-GAN fills) as a file in a folder. A later run with the same folder loads what
 of working it out again, and the result is the same, byte for byte, as a run that never stopped.
 
 Each file is written under a temporary name and renamed, so a file is whole or absent. Each
-records the OpenFilmKit version and model checksums that made it, and a run with anything else
+records the OpenFilmKit version, build and model checksums that made it, and a run with anything else
 ignores it and works the stage out again. The folder must belong to one photo and one set of
 options: a job package's work/checkpoints/ does (its name is the job's checksum).
 """
@@ -21,7 +21,8 @@ from .. import __version__, models
 
 
 def made_with():
-    return {'openfilmkit': __version__, 'models': {k: m['sha256'] for k, m in models.MODELS.items()}}
+    from ..jobs import build
+    return {'openfilmkit': __version__, 'build': build(), 'models': {k: m['sha256'] for k, m in models.MODELS.items()}}
 
 
 class Checkpoints:

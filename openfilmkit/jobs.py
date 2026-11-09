@@ -9,19 +9,21 @@ A package is a folder named after its job ID:
              worked out, so the next run, here or on another machine, goes on from there
 
 The job ID is the SHA-256 of job.json's 'job' part: the command, its options, the input's
-checksum, the OpenFilmKit version and the models' checksums. That is everything that decides the
-output and nothing else, so packing the same work twice gives the same package, from any folder
-on any machine, and running a finished job again does nothing. The 'about' part (the original
-path, the suggested output name, when and where it was packed) is kept but not hashed.
+checksum, the OpenFilmKit version and build (a fingerprint of its code) and the models'
+checksums. That is everything that decides the output and nothing else, so packing the same work
+twice gives the same package, from any folder on any machine, and running a finished job again
+does nothing. The 'about' part is kept but not hashed: where the result goes (one destination for
+each photo packed into the job: two identical scans in different folders share one job and both
+get the result), and when and where it was packed.
 
-A job runs only on the OpenFilmKit version that packed it, since another version can give other
-pixels. Run results are written under temporary names and renamed into out/, the recipe last, so
+A job runs only on the OpenFilmKit build that packed it, since other code can give other pixels. Run results are written under temporary names and renamed into out/, the recipe last, so
 a run that stops partway leaves the job unfinished rather than half done, and two machines that
 run the same job end with the same file. A resumed run gives the same file as one that never
 stopped; the recipe says which stages were resumed, and from which machine. The checkpoints are
 deleted once the job is done.
 """
 import datetime
+import functools
 import hashlib
 import inspect
 import json
@@ -44,6 +46,23 @@ class JobError(Exception):
 def sha(path):
     with open(path, 'rb') as f:
         return hashlib.file_digest(f, 'sha256').hexdigest()
+
+
+@functools.lru_cache(maxsize=1)
+def build():
+    """A fingerprint of this OpenFilmKit's code (its Python files): two installs with the same one
+    give the same pixels, even between releases, when the version number alone can't tell."""
+    root = Path(__file__).resolve().parent
+    h = hashlib.sha256()
+    for p in sorted(root.rglob('*.py')):
+        h.update(p.relative_to(root).as_posix().encode() + b'\0' + p.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def plain_name(name):
+    """True for a bare file name: nothing that could reach outside the folder it's used in."""
+    return (isinstance(name, str) and name not in ('', '.', '..') and '/' not in name and '\\' not in name
+            and '\0' not in name and Path(name).name == name)
 
 
 def job_id(job):
@@ -96,11 +115,12 @@ def clean_job(source, output=None, **options):
     opts = {k: options.get(k, defaults[k].default) for k in CLEAN_OPTIONS}
     opts['spots'] = [list(s) for s in opts['spots'] or []]
     job = {'format': FORMAT, 'command': 'clean', 'options': opts, 'output_suffix': suffix,
-           'input': {'sha256': sha(source)}, 'openfilmkit': __version__, 'models': {}}
+           'input': {'sha256': sha(source)}, 'openfilmkit': __version__, 'build': build(), 'models': {}}
     if opts['scratches']:
         from . import models
         job['models'] = {k: m['sha256'] for k, m in models.MODELS.items()}
     about = {'source': str(source), 'output_name': name, 'input_name': source.name,
+             'destinations': [{'source': str(source), 'output_name': name}],
              'packed_utc': _now(), 'packed_on': socket.gethostname(), 'megapixels': megapixels(source)}
     return job, about
 
@@ -154,8 +174,14 @@ def _write_package(into, job, about, files):
     jid = job_id(job)
     dest = into / jid
     if (dest / 'job.json').exists():
-        if read(dest)[0] != job:
+        have, known = read(dest)
+        if have != job:
             raise JobError(f'{dest} holds a different job under the same ID')
+        destinations = known.setdefault('destinations', [])
+        for d in about['destinations']:     # the same photo again, from somewhere else: send it there too
+            if d not in destinations:
+                destinations.append(d)
+                _write_json(dest / 'job.json', {'job': have, 'about': known})
         return dest
     into.mkdir(parents=True, exist_ok=True)
     tmp = into / f'.{jid}.{os.getpid()}.packing'
@@ -190,6 +216,12 @@ def read(package):
         raise JobError(f'{package}: package format {job.get("format")}; this OpenFilmKit reads {FORMAT}')
     if package.name != job_id(job):
         raise JobError(f'{package}: job.json does not match the package ID (it was changed)')
+    names = [about.get('input_name'), about.get('output_name')]
+    names += [d.get('output_name') for d in about.get('destinations', [])]
+    if not all(plain_name(n) for n in names):
+        raise JobError(f'{package}: job.json names a file outside the package')
+    if any(Path(n).suffix.lower() != job.get('output_suffix') for n in names[1:]):
+        raise JobError(f'{package}: job.json asks for an output of another kind than the job makes')
     return job, about
 
 
@@ -219,6 +251,9 @@ def run(package, say=None):
         return finished
     if job['openfilmkit'] != __version__:
         raise JobError(f'this job was packed for OpenFilmKit {job["openfilmkit"]}; this is {__version__}')
+    if job.get('build') != build():
+        raise JobError(f'this job was packed by other OpenFilmKit {__version__} code (build {job.get("build")}; '
+                       f'this is {build()}): install the same code here')
     source = package / 'input' / about['input_name']
     if not source.is_file() or sha(source) != job['input']['sha256']:
         raise JobError(f'{package}: the input is missing or does not match its checksum')
@@ -251,27 +286,34 @@ def run(package, say=None):
 
 
 def collect(package, to=None):
-    """Copy a finished job's result and recipe out of the package: into folder `to`, or beside
-    the original source. Collecting again is harmless; a different file already at the
-    destination is never replaced. Returns the recipe as written there."""
+    """Copy a finished job's result and recipe out of the package to each of its destinations
+    (beside each photo packed into it), or all into folder `to`. Collecting again is harmless; a
+    different file already at a destination is never replaced. Returns the recipes as written,
+    one per destination."""
     package = Path(package).expanduser().resolve()
     job, about = read(package)
     record = done(package)
     if not record:
         raise JobError(f'{package}: the job has not finished')
-    folder = Path(to).expanduser().resolve() if to else Path(about['source']).parent
-    dest = folder / about['output_name']
-    recipe = Path(str(dest) + '.json')
-    if dest.exists() and sha(dest) != record['output_sha256']:
-        raise JobError(f'refusing to replace {dest}, a different file')
-    folder.mkdir(parents=True, exist_ok=True)
-    if not dest.exists():
-        tmp = dest.with_name(f'.{dest.name}.{os.getpid()}.tmp')
-        shutil.copyfile(_result(package, about), tmp)
-        os.replace(tmp, dest)
-    record = dict(record, output=str(dest))
-    _write_json(recipe, record)
-    return record
+    destinations = about.get('destinations') or [{'source': about['source'], 'output_name': about['output_name']}]
+    planned = []
+    for d in destinations:
+        folder = Path(to).expanduser().resolve() if to else Path(d['source']).parent
+        dest = folder / d['output_name']
+        if dest.exists() and sha(dest) != record['output_sha256']:
+            raise JobError(f'refusing to replace {dest}, a different file')
+        planned.append((d, folder, dest))
+    written = []
+    for d, folder, dest in planned:
+        folder.mkdir(parents=True, exist_ok=True)
+        if not dest.exists():
+            tmp = dest.with_name(f'.{dest.name}.{os.getpid()}.tmp')
+            shutil.copyfile(_result(package, about), tmp)
+            os.replace(tmp, dest)
+        mine = dict(record, source=d['source'], output=str(dest))
+        _write_json(Path(str(dest) + '.json'), mine)
+        written.append(mine)
+    return written
 
 
 def remove(package):

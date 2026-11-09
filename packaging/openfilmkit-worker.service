@@ -13,7 +13,9 @@ Restart=on-failure
 RestartSec=60
 # Below everything else, and capped: a job that would need more is left for another worker.
 Nice=19
+CPUQuota=200%
 MemoryMax=2.8G
+MemorySwapMax=0
 # On stop the worker pushes a job's slow stages and lets go of its claim, so give it time.
 TimeoutStopSec=120
 

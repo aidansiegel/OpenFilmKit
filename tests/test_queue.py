@@ -104,7 +104,7 @@ class Queue(unittest.TestCase):
     def test_a_worker_runs_each_job_in_its_own_process_and_keeps_its_claim_alive(self):
         self.queue_photos()
         beats = []
-        w = self.worker('w1', renew=0.05)
+        w = self.worker('w1', renew=0.05, check=0.05)
         real = w._lease
 
         def renewed(jid, claimed=None):
@@ -116,6 +116,91 @@ class Queue(unittest.TestCase):
             jid = w.once()
         self.assertGreater(beats.count(jid), 1)                             # claimed, then renewed
         self.assertEqual([r['state'] for r in queues.status(self.q)['jobs'] if r['id'] == jid], ['done'])
+
+    def test_the_same_photo_in_two_folders_comes_back_to_both(self):
+        twin = self.root / 'elsewhere' / 'twin.png'
+        twin.parent.mkdir()
+        shutil.copyfile(self.photos[0], twin)
+        code, packed = self.ofk('clean', str(self.photos[0]), str(twin), '--no-faces', '--queue', 'home')
+        self.assertEqual(packed[0]['id'], packed[1]['id'])
+        self.worker('w1').once()
+        recs = queues.collect(self.q, say=lambda *a: None)
+        self.assertEqual(sorted(r['output'] for r in recs),
+                         sorted([str(self.photos[0].with_name('frame-01-v1-clean-v1.png')),
+                                 str(twin.with_name('twin-clean-v1.png'))]))
+
+    def test_where_collecting_may_not_delete_a_workers_files_the_worker_clears_them(self):
+        self.queue_photos()
+        w1 = self.worker('w1')
+        jid = w1.once()
+        real = queues._remote
+
+        def no_rights_in_drop(q, *command):   # as on a server: the drop folders belong to the workers
+            if command[:1] == ('rm',) and any('/drop/' in c for c in command):
+                return False
+            return real(q, *command)
+        with mock.patch.object(queues, '_remote', no_rights_in_drop):
+            queues.collect(self.q, say=lambda *a: None)
+        self.assertTrue((self.queue / 'drop' / 'w1' / 'results' / jid).exists())
+        w1.once()                                                          # the next look tidies up
+        self.assertFalse((self.queue / 'drop' / 'w1' / 'results' / jid).exists())
+
+    def test_a_bad_result_collecting_may_not_delete_is_turned_down_and_redone(self):
+        self.queue_photos()
+        w1 = self.worker('w1')
+        jid = w1.once()
+        out = self.queue / 'drop' / 'w1' / 'results' / jid / 'out'
+        next(p for p in out.iterdir() if p.suffix == '.png').write_bytes(b'tampered')
+        with mock.patch.object(queues, '_remote', lambda q, *c: False if c[:1] == ('rm',) else True):
+            queues.collect(self.q, say=lambda *a: None)
+        self.assertTrue((self.queue / 'jobs' / jid / 'rejected.json').exists())
+        self.assertIn(jid, w1.candidates(w1.view()))                        # free to run again
+        self.assertEqual(w1.once(), jid)                                    # tidies the bad one, redoes it
+        rec = next(r for r in queues.collect(self.q, say=lambda *a: None) if r.get('job', {}).get('id') == jid)
+        self.assertEqual(jobs.sha(rec['output']), rec['output_sha256'])
+
+    def test_a_worker_makes_way_for_another_program_and_comes_back(self):
+        self.queue_photos()
+        with mock.patch.object(queues, 'busy', lambda units, mb: 'photo-worker.service'):
+            self.assertIsNone(self.worker('w1', yield_to='photo-worker.service').once())
+        calls = []
+
+        def runner(package, beat, every):
+            beat()
+            jobs.run(package)
+
+        def busy_once(units, mb):     # free when the job is picked, busy at its first check
+            calls.append(1)
+            return 'photo-worker.service' if len(calls) == 2 else None
+        w = self.worker('w1', run=runner, yield_to='photo-worker.service')
+        with mock.patch.object(queues, 'busy', busy_once):
+            jid = w.once()
+        self.assertNotIn('done', [r['state'] for r in queues.status(self.q)['jobs'] if r['id'] == jid])
+        self.assertFalse((self.queue / 'drop' / 'w1' / 'leases' / f'{jid}.json').exists())   # claim let go
+        self.assertEqual(w.once(), jid)                                     # and taken up again later
+
+    def test_a_worker_that_cant_renew_its_claim_stops_without_publishing(self):
+        self.queue_photos()
+        w = self.worker('w1', renew=0, lease=0)
+
+        def runner(package, beat, every):
+            w._push = lambda: setattr(w, '_pushed', False) or False         # the network goes away
+            beat()
+            jobs.run(package)
+        w.run = runner
+        jid = w.once()
+        self.assertFalse((self.queue / 'drop' / 'w1' / 'results' / jid).exists())
+
+    def test_jobs_packed_elsewhere_go_only_where_youre_told(self):
+        ids = self.queue_photos()
+        shutil.rmtree(queues.outbox(self.q))                                # as if packed on another machine
+        w = self.worker('w1')
+        w.once(), w.once()
+        recs = queues.collect(self.q, say=lambda *a: None)
+        self.assertTrue(all('--to' in r['error'] for r in recs))
+        recs = queues.collect(self.q, to=self.root / 'inbox', say=lambda *a: None)
+        self.assertEqual(sorted(Path(r['output']).parent.name for r in recs), ['inbox', 'inbox'])
+        self.assertEqual(len(ids), 2)
 
     def test_a_live_claim_keeps_other_workers_off_and_a_lapsed_one_doesnt(self):
         self.queue_photos()

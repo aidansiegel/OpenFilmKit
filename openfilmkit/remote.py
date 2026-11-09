@@ -73,18 +73,22 @@ def _rsync(h, *args):
 
 
 def check(h):
-    """The host's OpenFilmKit must be this version."""
+    """The host's OpenFilmKit must be this version, with the same code (build)."""
     r = _ssh(h, shlex.split(h['openfilmkit']) + ['--version'])
     found = (r.stdout or '').strip()
     if r.returncode or not found:
         raise RemoteError(f"couldn't run {h['openfilmkit']!r} on {h['name']} (set its path in {config_file()})")
     if found != __version__:
         raise RemoteError(f'{h["name"]} has OpenFilmKit {found}; jobs from here need {__version__}')
+    r = _ssh(h, shlex.split(h['openfilmkit']) + ['job', 'build'])
+    if (r.stdout or '').strip() != jobs.build():
+        raise RemoteError(f'{h["name"]} has other OpenFilmKit {__version__} code than this machine '
+                          f'(build {(r.stdout or "?").strip()}, here {jobs.build()}): install the same code there')
 
 
 def run_on(name, packages, to=None, keep=False, say=print):
     """Run local job packages on host `name` and collect their results (into folder `to`, or
-    beside each original). Returns [recipe or {'package', 'error'}] in the packages' order."""
+    beside each original). Returns {package: [recipe per destination] or {'package', 'error'}}."""
     h = host(name)
     check(h)
     asked = [Path(p) for p in packages]
@@ -116,15 +120,14 @@ def run_on(name, packages, to=None, keep=False, say=print):
                 _rsync(h, f'{h["ssh"]}:{path}/out/', f'{p}/out/')
             if not jobs.done(p):   # checks the result against its recipe
                 raise RemoteError(f'the job did not finish on {h["name"]}; run the same command again to resume it')
-            record = jobs.collect(p, to)
+            record = jobs.collect(p, to)   # one recipe per destination
             if not keep:   # collected and checked: the copies there and here can go
                 _ssh(h, shlex.split(h['openfilmkit']) + ['job', 'remove', path])
                 jobs.remove(p)
             results.append(record)
         except (RemoteError, jobs.JobError) as e:
             results.append({'package': str(p), 'error': str(e)})
-    by_package = dict(zip(packages, results))
-    return [by_package[p] for p in asked]
+    return {str(p): r for p, r in zip(packages, results)}
 
 
 def outbox(name):
