@@ -135,10 +135,10 @@ class Queue(unittest.TestCase):
         jid = w1.once()
         real = queues._remote
 
-        def no_rights_in_drop(q, *command):   # as on a server: the drop folders belong to the workers
+        def no_rights_in_drop(q, *command, **kw):   # as on a server: the drop folders belong to the workers
             if command[:1] == ('rm',) and any('/drop/' in c for c in command):
                 return False
-            return real(q, *command)
+            return real(q, *command, **kw)
         with mock.patch.object(queues, '_remote', no_rights_in_drop):
             queues.collect(self.q, say=lambda *a: None)
         self.assertTrue((self.queue / 'drop' / 'w1' / 'results' / jid).exists())
@@ -151,7 +151,7 @@ class Queue(unittest.TestCase):
         jid = w1.once()
         out = self.queue / 'drop' / 'w1' / 'results' / jid / 'out'
         next(p for p in out.iterdir() if p.suffix == '.png').write_bytes(b'tampered')
-        with mock.patch.object(queues, '_remote', lambda q, *c: False if c[:1] == ('rm',) else True):
+        with mock.patch.object(queues, '_remote', lambda q, *c, **kw: False if c[:1] == ('rm',) else True):
             queues.collect(self.q, say=lambda *a: None)
         self.assertTrue((self.queue / 'jobs' / jid / 'rejected.json').exists())
         self.assertIn(jid, w1.candidates(w1.view()))                        # free to run again
