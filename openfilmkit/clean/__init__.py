@@ -1,9 +1,10 @@
 """Clean-up of converted viewing copies: dust, holder crop, optional color, straightening, red eye.
 
-Order follows the archive pipeline this came from (clean_batch.py first_pass): protect the date
-stamp and faces, remove dust from the original, optionally fix color, then crop. Manual
-adjustments and red eye come after. Nothing is invented: dust is filled only from its immediate
-surroundings (OpenCV inpainting), and there is no generative fill.
+Order follows the archive pipeline this came from (clean_batch.py): protect the date stamp and
+faces, remove dust from the original, optionally fix color, then crop; then, if asked, the
+scratch pass (see scratches.py) on the cropped copy. Manual adjustments and red eye come after.
+Dust is filled only from its immediate surroundings (OpenCV inpainting). The scratch pass is the
+one step that makes up picture (a generative fill), so it is opt-in and recorded as such.
 
 Faces are found with YuNet, a small face detector built into OpenCV (model bundled in data/, MIT
 license, from the OpenCV Zoo). It gives five landmarks per face, so, as in the archive pipeline,
@@ -24,7 +25,8 @@ import numpy as np
 from PIL import Image
 
 from .. import __version__
-from . import redeye, restore
+from . import redeye, restore, scratches as scratch_pass
+from .. import models
 
 Image.MAX_IMAGE_PIXELS = None
 DETECT_SIDE = 1200
@@ -116,8 +118,10 @@ def default_output(source):
 
 
 def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=False,
-          straighten=None, lift_shadows=None, red_eye=False):
-    """Clean `source` into a new file with a recipe beside it (<output>.json). Returns the recipe."""
+          straighten=None, lift_shadows=None, red_eye=False, scratches=False, spare_long_lines=False,
+          say=None):
+    """Clean `source` into a new file with a recipe beside it (<output>.json). Returns the recipe.
+    `say` reports model downloads (scratches only)."""
     source = Path(source).expanduser().resolve()
     dest = Path(output).expanduser().resolve() if output else default_output(source)
     recipe_path = Path(str(dest) + '.json')
@@ -154,6 +158,19 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         l, t, r, b = restore.find_crop(img)
         cleaned = np.ascontiguousarray(cleaned[t:b, l:r])
         steps.append({'step': 'crop', 'box': [l, t, r, b], 'changed': [l, t, r, b] != [0, 0, w, h]})
+    if scratches:
+        try:
+            nets = scratch_pass.load_nets(say)
+        except models.ModelError as e:
+            raise CleanError(str(e)) from e
+        # Faces and the stamp again, on the cropped copy the pass works on.
+        on = find_faces(cleaned) if protect_faces else []
+        cleaned, stats = scratch_pass.repair(cleaned, on, restore.stamp_mask(cleaned), restore.dust_mask, nets,
+                                             spare_long_lines=spare_long_lines)
+        steps.append({'step': 'scratches', **stats, 'faces': len(on), 'spare_long_lines': spare_long_lines,
+                      'method': 'scratch-detection UNet, then MI-GAN generative fill (OpenCV DNN)',
+                      'models': {k: {'file': m['file'], 'sha256': m['sha256'], 'source': m['source']}
+                                 for k, m in models.MODELS.items()}})
     if straighten:
         cleaned = restore.straighten(cleaned, straighten)
         steps.append({'step': 'straighten', 'degrees': straighten})
@@ -177,22 +194,24 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         'status': 'Cleaned copy — requires visual review',
         'source': str(source), 'source_sha256': digest,
         'source_recipe_sha256': sha(source_recipe) if source_recipe.exists() else None,
-        'options': settings(crop, dust, protect_faces, color, straighten, lift_shadows, red_eye),
+        'options': settings(crop, dust, protect_faces, color, straighten, lift_shadows, red_eye,
+                            scratches, spare_long_lines),
         'steps': steps, 'faces': faces,
         'source_dimensions': [w, h], 'output_dimensions': [cleaned.shape[1], cleaned.shape[0]],
         'output': str(dest), 'output_sha256': sha(dest),
         'libraries': {'opencv': cv2.__version__, 'numpy': np.__version__},
-        'generative_processing': False, 'approved': False,
+        'generative_processing': bool(scratches), 'approved': False,
     }
     recipe_path.write_text(json.dumps(record, indent=2) + '\n')
     return record
 
 
 def settings(crop=True, dust=True, protect_faces=True, color=False, straighten=None,
-             lift_shadows=None, red_eye=False):
+             lift_shadows=None, red_eye=False, scratches=False, spare_long_lines=False):
     """The clean options, as recorded in a recipe and compared by roll_sources()."""
     return {'crop': crop, 'dust': dust, 'protect_faces': protect_faces, 'color': color,
-            'straighten': straighten, 'lift_shadows': lift_shadows, 'red_eye': red_eye}
+            'straighten': straighten, 'lift_shadows': lift_shadows, 'red_eye': red_eye,
+            'scratches': scratches, 'spare_long_lines': spare_long_lines}
 
 
 def roll_sources(roll_dir, wanted=None):

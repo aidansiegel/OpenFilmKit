@@ -242,7 +242,7 @@ def cmd_clean(args, out):
                 raise Fail(f'{path} is a folder but not a roll')
             sources += clean.roll_sources(path, clean.settings(
                 args.crop, args.dust, args.faces, args.color, args.straighten,
-                args.lift_shadows, args.red_eye))
+                args.lift_shadows, args.red_eye, args.scratches, args.spare_long_lines))
         else:
             sources.append(path)
     if args.output and len(sources) != 1:
@@ -255,7 +255,8 @@ def cmd_clean(args, out):
             record = clean.clean(source, args.output, crop=args.crop, dust=args.dust,
                                  protect_faces=args.faces, color=args.color,
                                  straighten=args.straighten, lift_shadows=args.lift_shadows,
-                                 red_eye=args.red_eye)
+                                 red_eye=args.red_eye, scratches=args.scratches,
+                                 spare_long_lines=args.spare_long_lines, say=out.error)
         except clean.CleanError as e:
             out.error(f'openfilmkit: {source}: {e}')
             records.append({'source': str(source), 'error': str(e)})
@@ -372,6 +373,8 @@ def parser():
 
     sub.add_parser('stocks', parents=[common], help='film stocks and their candidate profiles')
     sub.add_parser('profiles', parents=[common], help='numerical response profiles and sources')
+    s = sub.add_parser('models', parents=[common], help='the trained models clean --scratches uses')
+    s.add_argument('--fetch', action='store_true', help='download any that are missing, and check them')
 
     s = sub.add_parser('convert', parents=[common],
                        help='viewing copy of a color negative or slide from a linear RGB16 master')
@@ -404,6 +407,12 @@ def parser():
     s.add_argument('--straighten', type=float, metavar='DEGREES', help='rotate, positive = counter-clockwise')
     s.add_argument('--lift-shadows', type=float, metavar='GAMMA', help='brighten shadows, e.g. 0.85')
     s.add_argument('--red-eye', action='store_true', help='darken flash-red pupils')
+    s.add_argument('--scratches', action='store_true',
+                   help='also find scratches and debris with a trained model and fill them with a generative '
+                        'model (MI-GAN); downloads about 100 MB of models on first use')
+    s.add_argument('--spare-long-lines', action='store_true',
+                   help='with --scratches: leave long straight lines outside faces (tile grout, wires), '
+                        'which the model can take for scratches')
 
     s = sub.add_parser('scan', parents=[common], help='capture linear 48-bit TIFF masters')
     s.add_argument('target', help='a roll folder (next frame) or an explicit .tif path')
@@ -421,9 +430,27 @@ def parser():
     return p
 
 
+def cmd_models(args, out):
+    from . import models
+    if args.fetch:
+        try:
+            models.fetch(say=out.error)
+        except models.ModelError as e:
+            raise Fail(str(e))
+    listing = models.status()
+    out.say(f'Models for clean --scratches, in {models.folder()}:')
+    for name, m in listing.items():
+        out.say(f"  {name}: {'present' if m['present'] else 'not downloaded'} "
+                f"({m['bytes'] / 1e6:.0f} MB) — {m['source']}")
+    if not all(m['present'] for m in listing.values()):
+        out.say('Run `openfilmkit models --fetch` to download them now (otherwise on first use).')
+    out.result(listing)
+    return 0
+
+
 COMMANDS = {'doctor': cmd_doctor, 'scanners': cmd_scanners, 'options': cmd_options,
             'scan': cmd_scan, 'stocks': cmd_stocks, 'profiles': cmd_profiles,
-            'convert': cmd_convert, 'clean': cmd_clean}
+            'convert': cmd_convert, 'clean': cmd_clean, 'models': cmd_models}
 
 
 def _pipe_error(e):

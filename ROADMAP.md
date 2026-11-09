@@ -23,7 +23,7 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 | M2 | Capture: `doctor`, `scanners`, `options`, `roll new`, `scan` | Done on SANE's test backend; first hardware run pending. |
 | M3 | Film profiles and conversion | Done: 142 data-sheet profiles; `stocks`, `profiles`, `roll set`, `convert`. |
 | M4 | Scanner color profiling (IT8 target, ArgyllCMS) | Not started; needs an IT8 transparency target to finish. |
-| M5 | Cleanup: dust, fibers, holder edges, red eye | Done: `clean`. |
+| M5 | Cleanup: dust, fibers, holder edges, red eye, scratches | Done: `clean`, and `clean --scratches` (trained models, opt-in). |
 | M6 | Packaging: Homebrew tap for macOS and Linux | Done: `brew install` tested on macOS (arm64) and Fedora (aarch64). |
 | M7 | Terminal UI (Textual) | Not started. |
 | M8 | First release | 0.1.0, an early release ahead of M4 and M7, so the kit can be installed and tried. |
@@ -34,8 +34,8 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 - Scanning on Windows isn't supported (no SANE); `convert` and `clean` run there on raw scans from
   SilverFast or VueScan.
 - Two identical scanners connected at once can't be told apart (no per-unit ID).
-- `clean`'s holder crop is conservative, and a long thin scratch that breaks into short pieces can
-  be removed piecemeal, leaving a faint dashed trace.
+- `clean`'s holder crop is conservative. Without `--scratches`, a long thin scratch that breaks into
+  short pieces can be removed piecemeal, leaving a faint dashed trace.
 
 ## Open questions
 
