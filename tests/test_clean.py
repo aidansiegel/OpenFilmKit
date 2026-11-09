@@ -183,5 +183,79 @@ class Clean(unittest.TestCase):
                          ['frame-01-v1-clean-v1.jpg', 'frame-02-v1-clean-v1.jpg'])
 
 
+
+def scene16(w=900, h=600, seed=3):
+    """scene() at 16 bits, with the smooth gradient 8 bits can't hold."""
+    rng = np.random.default_rng(seed)
+    y, x = np.mgrid[:h, :w]
+    base = np.stack([90 + 60 * x / w, 100 + 40 * y / h, 120 - 30 * x / w], 2) * 257
+    return np.clip(base + rng.normal(0, 3 * 257, base.shape), 0, 65535).astype(np.uint16)
+
+
+@unittest.skipIf(clean is None, 'needs OpenCV, numpy and Pillow')
+class Deep(unittest.TestCase):
+    """16-bit TIFFs (convert --tiff) are cleaned at full depth."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def write(self, img, name='frame-v1.tif', icc=True):
+        import tifffile
+        from openfilmkit.films.convert import srgb_icc
+        path = self.root / name
+        tifffile.imwrite(path, img, photometric='rgb', iccprofile=srgb_icc() if icc else None)
+        return path
+
+    def test_dust_is_filled_at_16_bits_and_the_rest_left_exactly_alone(self):
+        import tifffile
+        img = scene16()
+        for x, y in [(150, 200), (420, 330), (700, 120)]:
+            img[y:y + 3, x:x + 3] = 65535
+        rec = clean.clean(self.write(img), protect_faces=False, crop=False)
+        out = tifffile.imread(rec['output'])
+        self.assertEqual(out.dtype, np.uint16)
+        self.assertEqual(rec['bits_per_channel'], {'source': 16, 'output': 16})
+        for x, y in [(150, 200), (420, 330), (700, 120)]:
+            self.assertLess(int(out[y + 1, x + 1].max()), 200 * 257)
+        far = np.ones(img.shape[:2], bool)
+        for x, y in [(150, 200), (420, 330), (700, 120)]:
+            far[y - 15:y + 18, x - 15:x + 18] = False
+        self.assertTrue((out[far] == img[far]).all())
+        self.assertGreater(len(np.unique(out[..., 0])), 2000)    # still 16-bit detail, not 8-bit steps
+
+    def test_every_step_decides_as_it_would_at_8_bits(self):
+        import tifffile
+        img = scene16()
+        img[:, :30] = 65535                                       # holder light to crop
+        opts = dict(protect_faces=False, color=True, straighten=2.0, lift_shadows=0.85)
+        deep = clean.clean(self.write(img), **opts)
+        flat = clean.clean(self.write(restore.to8(img), name='frame-v1.png', icc=False), **opts)
+        a = restore.to8(tifffile.imread(deep['output'])).astype(int)
+        b = np.asarray(Image.open(flat['output'])).astype(int)
+        self.assertEqual(a.shape, b.shape)                        # same crop and straightening
+        self.assertLess(np.abs(a - b).mean(), 1.0)
+        self.assertEqual([s['step'] for s in deep['steps']], [s['step'] for s in flat['steps']])
+
+    def test_a_16_bit_file_without_a_profile_is_a_master_and_is_refused(self):
+        with self.assertRaisesRegex(clean.CleanError, 'master'):
+            clean.clean(self.write(scene16(), icc=False))
+
+    def test_a_16_bit_tiff_can_also_give_a_jpeg(self):
+        rec = clean.clean(self.write(scene16()), self.root / 'web.jpg', protect_faces=False)
+        with Image.open(rec['output']) as im:
+            self.assertEqual(im.mode, 'RGB')
+        self.assertEqual(rec['bits_per_channel'], {'source': 16, 'output': 8})
+
+    def test_roll_includes_tiff_conversions(self):
+        r = self.root / 'roll-02'
+        roll.create(r)
+        (r / 'derived').mkdir()
+        self.root = r / 'derived'
+        self.write(scene16(), 'frame-01-v1.tif')
+        self.assertEqual([p.name for p in clean.roll_sources(r)], ['frame-01-v1.tif'])
+
 if __name__ == '__main__':
     unittest.main()

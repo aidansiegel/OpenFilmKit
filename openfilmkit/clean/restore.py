@@ -4,14 +4,21 @@ Ported from the author's earlier archive clean-up tools; the algorithms are unch
 per-photo no-crop list, which named two archive photos, is gone: use
 `openfilmkit clean --no-crop` instead.
 
-Every function takes and returns an RGB uint8 numpy array, and sizes scale with the image, so the
-same code tunes on 3000 px copies and runs on the 4800 dpi originals. Nothing here guesses at
+Every function takes and returns an RGB numpy array, and sizes scale with the image, so the same
+code tunes on 3000 px copies and runs on the 4800 dpi originals. Detection works on 8-bit images.
+The adjustments (color, straightening, shadows, dust fill) also take 16-bit images: they measure on
+an 8-bit copy (to8), so they decide exactly as they would at 8 bits, and apply at full depth. Nothing here guesses at
 missing picture: dust is filled only from its immediate surroundings, faces and the camera date
 stamp are never touched by it, and lines running through the picture (not touching an edge) are
 left alone by the crop.
 """
 import cv2
 import numpy as np
+
+
+def to8(img):
+    """An 8-bit copy of a 16-bit image (65535 / 255 = 257 exactly); 8-bit images pass through."""
+    return img if img.dtype == np.uint8 else np.rint(img / 257.0).astype(np.uint8)
 
 
 # ---------------------------------------------------------------- crop
@@ -136,7 +143,8 @@ def correct_color(img, exclude=None, strength=0.8, low=0.5, high=99.5, max_gain_
     Removes the scanner's cast and lifts washed-out scans. `exclude` (bool mask) keeps the date
     stamp and similar out of the statistics. Channel gains are kept within max_gain_spread of each
     other so a genuinely warm or cool scene is not forced gray."""
-    sample = img if exclude is None else img[~exclude]
+    small = to8(img)
+    sample = small if exclude is None else small[~exclude]
     sample = sample.reshape(-1, 3)
     if len(sample) > 400_000:
         sample = sample[:: len(sample) // 400_000]
@@ -146,9 +154,10 @@ def correct_color(img, exclude=None, strength=0.8, low=0.5, high=99.5, max_gain_
     g_mid = np.median(gain)
     gain = np.clip(gain, g_mid * (1 - max_gain_spread), g_mid * (1 + max_gain_spread))
     lo = np.clip(lo, 0, 60)
-    out = (img.astype(np.float32) - lo) * gain
+    scale = 1.0 if img.dtype == np.uint8 else 257.0   # the 8-bit levels, at the image's depth
+    out = (img.astype(np.float32) - lo * scale) * gain
     out = img.astype(np.float32) * (1 - strength) + out * strength
-    return np.clip(out, 0, 255).astype(np.uint8)
+    return np.clip(out, 0, 255 * scale).astype(img.dtype)
 
 
 def neutralize_cast(img, exclude=None, strength=0.7, cap=10.0):
@@ -157,12 +166,19 @@ def neutralize_cast(img, exclude=None, strength=0.7, cap=10.0):
     The cast is measured on low-chroma, mid-brightness pixels (walls, whites, grays); the shift is
     a fraction (`strength`) of it and never more than `cap` Lab units, so genuinely colored scenes
     keep most of their color."""
-    probe = img if exclude is None else np.where(exclude[..., None], 128, img).astype(np.uint8)
+    small = to8(img)
+    probe = small if exclude is None else np.where(exclude[..., None], 128, small).astype(np.uint8)
     a_m, b_m = color_cast(probe)
     shift = -strength * np.array([a_m, b_m])
     n = float(np.hypot(*shift))
     if n > cap:
         shift *= cap / n
+    if img.dtype != np.uint8:   # float Lab has the same a*, b* units as 8-bit Lab (offset by 128)
+        lab = cv2.cvtColor(img.astype(np.float32) / 65535, cv2.COLOR_RGB2LAB)
+        lab[..., 1] += shift[0]
+        lab[..., 2] += shift[1]
+        out = np.rint(np.clip(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB), 0, 1) * 65535).astype(np.uint16)
+        return out, (float(shift[0]), float(shift[1]))
     lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB).astype(np.float32)
     lab[..., 1] += shift[0]
     lab[..., 2] += shift[1]
@@ -201,6 +217,10 @@ def straighten(img, degrees):
 
 def lift_shadows(img, gamma=0.85, amount=1.0):
     """Brighten dark and middle tones (gamma below 1) without moving black and white points."""
+    if img.dtype != np.uint8:
+        lut = np.linspace(0, 1, 65536) ** gamma * 65535
+        lut = np.clip(np.arange(65536) * (1 - amount) + lut * amount, 0, 65535).astype(np.uint16)
+        return lut[img]
     lut = (np.linspace(0, 1, 256) ** gamma * 255).astype(np.float32)
     lut = np.clip(np.arange(256) * (1 - amount) + lut * amount, 0, 255).astype(np.uint8)
     return cv2.LUT(img, lut)
@@ -277,5 +297,9 @@ def remove_dust(img, mask):
     if not mask.any():
         return img
     radius = max(2, int(min(img.shape[:2]) * 0.0015))
+    if img.dtype != np.uint8:   # 16-bit inpainting is single-channel; per channel equals 3-channel at 8 bits
+        holes = mask.astype(np.uint8) * 255
+        return np.dstack([cv2.inpaint(np.ascontiguousarray(img[..., c]), holes, radius, cv2.INPAINT_TELEA)
+                          for c in range(3)])
     return cv2.inpaint(img, mask.astype(np.uint8) * 255, radius, cv2.INPAINT_TELEA)
 

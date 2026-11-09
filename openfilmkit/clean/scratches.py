@@ -445,15 +445,15 @@ def match_grain(res, mask, sigma=1.2, block=48, smooth_ratio=0.75, min_area=200,
 
 
 def repair(img, faces, protect, dust_mask, nets, spare_long_lines=False):
-    """The whole pass on an RGB uint8 image: (result, stats)."""
+    """The whole pass on an RGB uint8 image: (result, stats, mask). Every change is inside mask."""
     scratch_net, fill_net = nets
     prob = scratch_probability(scratch_net, img)
     mask, stats = build_mask(img, prob, protect, faces, dust_mask=dust_mask, spare_long_lines=spare_long_lines)
     del prob
     if not mask.any():
-        return img.copy(), dict(stats, model_calls=0, invented_replaced=0, spots_evened=0, grain_matched=0)
+        return img.copy(), dict(stats, model_calls=0, invented_replaced=0, spots_evened=0, grain_matched=0), mask
     telea = cv2.inpaint(img, mask * 255, 3, cv2.INPAINT_TELEA)
     res, calls = generative_fill(img, mask, fill_window(fill_net))
     res, settle = settle_fill(res, telea, mask, grow_for(img.shape))
     res, grained = match_grain(res, mask)
-    return res, dict(stats, **settle, grain_matched=grained, model_calls=calls, pixels_filled=int(mask.sum()))
+    return res, dict(stats, **settle, grain_matched=grained, model_calls=calls, pixels_filled=int(mask.sum())), mask

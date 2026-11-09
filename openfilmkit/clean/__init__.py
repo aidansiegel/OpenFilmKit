@@ -6,6 +6,12 @@ scratch pass (see scratches.py) on the cropped copy. Manual adjustments and red 
 Dust is filled only from its immediate surroundings (OpenCV inpainting). The scratch pass is the
 one step that makes up picture (a generative fill), so it is opt-in and recorded as such.
 
+16-bit TIFFs (from `convert --tiff`) are cleaned at full depth: every decision (dust, faces, the
+stamp, the crop, color statistics, scratches, red eye) is made on an 8-bit copy, exactly as for
+an 8-bit file, and applied to the 16-bit image. Color, crop, straightening, shadows and dust fills
+are computed at 16 bits; scratch fills and red eye, which replace small regions, are 8-bit
+precision inside those regions.
+
 Faces are found with YuNet, a small face detector built into OpenCV (model bundled in data/, MIT
 license, from the OpenCV Zoo). It gives five landmarks per face, so, as in the archive pipeline,
 only eyes and mouths are protected from dust removal and the rest of the face is cleaned. It looks
@@ -89,7 +95,27 @@ def find_faces(img):
     return faces
 
 
+OUTPUTS = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
+
+
 def load(path):
+    """RGB uint8, or uint16 for a 16-bit TIFF with a color profile (a converted copy). A 16-bit file
+    without one is a linear scan master, which needs `convert` first."""
+    if Path(path).suffix.lower() in ('.tif', '.tiff'):
+        import tifffile
+        try:
+            with tifffile.TiffFile(path) as tif:
+                page = tif.pages[0]
+                img = page.asarray()
+                icc = 34675 in page.tags
+        except (OSError, ValueError, tifffile.TiffFileError) as e:
+            raise CleanError(f'cannot read image: {e}') from e
+        if img.ndim != 3 or img.shape[2] not in (3, 4) or img.dtype not in (np.uint8, np.uint16):
+            raise CleanError(f'{img.dtype} image of shape {img.shape}; clean works on RGB conversions')
+        if img.dtype == np.uint16 and not icc:
+            raise CleanError('16-bit TIFF without a color profile: this looks like a linear scan master; '
+                             'convert it first')
+        return np.ascontiguousarray(img[..., :3])
     try:
         with Image.open(path) as im:
             if im.mode not in ('RGB', 'L', 'P', 'RGBA'):
@@ -100,8 +126,11 @@ def load(path):
 
 
 def save(img, dest):
-    from ..films.convert import srgb_icc
-    im = Image.fromarray(img)
+    from ..films.convert import srgb_icc, write_tiff
+    if dest.suffix.lower() in ('.tif', '.tiff'):
+        write_tiff(dest, img, srgb_icc())
+        return
+    im = Image.fromarray(restore.to8(img))
     if dest.suffix.lower() == '.png':
         im.save(dest, icc_profile=srgb_icc())
     else:
@@ -125,8 +154,8 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
     source = Path(source).expanduser().resolve()
     dest = Path(output).expanduser().resolve() if output else default_output(source)
     recipe_path = Path(str(dest) + '.json')
-    if dest == source or dest.suffix.lower() not in ('.jpg', '.jpeg', '.png'):
-        raise CleanError('choose a separate .jpg or .png output')
+    if dest == source or dest.suffix.lower() not in OUTPUTS:
+        raise CleanError('choose a separate .jpg, .png or .tif output')
     for p in (dest, recipe_path):
         if p.exists():
             raise CleanError(f'refusing to overwrite {p}')
@@ -136,14 +165,15 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         raise CleanError('lift-shadows gamma must be between 0.3 and 1')
     digest = sha(source)
     img = load(source)
+    view = restore.to8   # decisions on 8 bits; for an 8-bit image this is the image itself
     h, w = img.shape[:2]
     steps = []
 
-    stamp = restore.stamp_mask(img)
-    faces = find_faces(img) if protect_faces else []
+    stamp = restore.stamp_mask(view(img))
+    faces = find_faces(view(img)) if protect_faces else []
     if dust:
         protect = stamp | restore.feature_mask(img.shape, faces)   # eyes and mouths
-        mask = restore.dust_mask(img, protect=protect)
+        mask = restore.dust_mask(view(img), protect=protect)
         cleaned = restore.remove_dust(img, mask)
         steps.append({'step': 'dust', 'pixels_filled': int(mask.sum()),
                       'share': round(float(mask.mean()), 6), 'faces_protected': len(faces),
@@ -155,7 +185,7 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         cleaned, shift = restore.fix_color(cleaned, exclude=stamp)
         steps.append({'step': 'color', 'cast_shift_ab': [round(v, 2) for v in shift]})
     if crop:
-        l, t, r, b = restore.find_crop(img)
+        l, t, r, b = restore.find_crop(view(img))
         cleaned = np.ascontiguousarray(cleaned[t:b, l:r])
         steps.append({'step': 'crop', 'box': [l, t, r, b], 'changed': [l, t, r, b] != [0, 0, w, h]})
     if scratches:
@@ -164,9 +194,15 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         except models.ModelError as e:
             raise CleanError(str(e)) from e
         # Faces and the stamp again, on the cropped copy the pass works on.
-        on = find_faces(cleaned) if protect_faces else []
-        cleaned, stats = scratch_pass.repair(cleaned, on, restore.stamp_mask(cleaned), restore.dust_mask, nets,
-                                             spare_long_lines=spare_long_lines)
+        small = view(cleaned)
+        on = find_faces(small) if protect_faces else []
+        repaired, stats, filled = scratch_pass.repair(small, on, restore.stamp_mask(small), restore.dust_mask, nets,
+                                                      spare_long_lines=spare_long_lines)
+        if cleaned.dtype == np.uint8:
+            cleaned = repaired
+        else:   # every change is inside the filled mask
+            cleaned = cleaned.copy()
+            cleaned[filled > 0] = repaired[filled > 0].astype(np.uint16) * 257
         steps.append({'step': 'scratches', **stats, 'faces': len(on), 'spare_long_lines': spare_long_lines,
                       'method': 'scratch-detection UNet, then MI-GAN generative fill (OpenCV DNN)',
                       'models': {k: {'file': m['file'], 'sha256': m['sha256'], 'source': m['source']}
@@ -178,8 +214,15 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         cleaned = restore.lift_shadows(cleaned, gamma=lift_shadows)
         steps.append({'step': 'lift_shadows', 'gamma': lift_shadows})
     if red_eye:
-        found = find_faces(cleaned)
-        cleaned, fixed = redeye.correct(cleaned, found)
+        small = view(cleaned)
+        found = find_faces(small)
+        corrected, fixed = redeye.correct(small, found)
+        if cleaned.dtype == np.uint8:
+            cleaned = corrected
+        else:   # only the pupils change
+            changed = (corrected != small).any(axis=2)
+            cleaned = cleaned.copy()
+            cleaned[changed] = corrected[changed].astype(np.uint16) * 257
         steps.append({'step': 'red_eye', 'faces_with_eyes': len(found),
                       'eyes_corrected': [list(e) for e in fixed]})
 
@@ -199,6 +242,8 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         'steps': steps, 'faces': faces,
         'source_dimensions': [w, h], 'output_dimensions': [cleaned.shape[1], cleaned.shape[0]],
         'output': str(dest), 'output_sha256': sha(dest),
+        'bits_per_channel': {'source': 16 if img.dtype == np.uint16 else 8,
+                             'output': 16 if cleaned.dtype == np.uint16 and dest.suffix.lower() in ('.tif', '.tiff') else 8},
         'libraries': {'opencv': cv2.__version__, 'numpy': np.__version__},
         'generative_processing': bool(scratches), 'approved': False,
     }
@@ -223,7 +268,7 @@ def roll_sources(roll_dir, wanted=None):
     todo = []
     for p in sorted(derived.glob('*')):
         # Hidden files include the ._ sidecars macOS writes on exFAT drives.
-        if p.name.startswith('.') or p.suffix.lower() not in ('.jpg', '.jpeg', '.png') or '-clean-v' in p.stem:
+        if p.name.startswith('.') or p.suffix.lower() not in OUTPUTS or '-clean-v' in p.stem:
             continue
         done = False
         for recipe in derived.glob(f'{p.stem}-clean-v*{p.suffix}.json'):

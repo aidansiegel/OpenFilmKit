@@ -57,8 +57,9 @@ def density_lut(model,base,offsets,black,white,profile_strength=.4,mid=None,mid_
     return table
 
 
-def render_density(raw,lut,contrast=1.1,gamma=1.,recover_clipped_blue=False):
-    """Optional conservative blue estimate where scanner samples are missing; never restores raw detail."""
+def render_density(raw,lut,contrast=1.1,gamma=1.,recover_clipped_blue=False,top=255):
+    """Optional conservative blue estimate where scanner samples are missing; never restores raw detail.
+    top: 255 for 8-bit output, 65535 for 16-bit."""
     a=np.stack([lut[raw[:,:,c],c] for c in range(3)],2).astype(float)/65535
     if recover_clipped_blue:
         blend=np.clip((64-raw[:,:,2].astype(float))/56,0,1)
@@ -68,4 +69,4 @@ def render_density(raw,lut,contrast=1.1,gamma=1.,recover_clipped_blue=False):
         a=np.where(linear<=.0031308,linear*12.92,1.055*np.maximum(linear,0)**(1/2.4)-.055)
     L=np.sum(a*np.array([.2126,.7152,.0722]),2,keepdims=True);v=np.clip(L,0,1)
     up=v**contrast;down=(1-v)**contrast;target=(up/(up+down))**(1/gamma)
-    return np.rint(np.clip(a*target/np.maximum(L,1e-10),0,1)*255).astype(np.uint8)
+    return np.rint(np.clip(a*target/np.maximum(L,1e-10),0,1)*top).astype(np.uint8 if top==255 else np.uint16)

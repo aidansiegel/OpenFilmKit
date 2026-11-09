@@ -43,6 +43,14 @@ def raw_open(path):
     except KeyError as e:raise ValueError(f'Unsupported TIFF compression: {e}') from e
     return np.moveaxis(a[:3],0,-1) if planar else a[:,:,:3]
 
+OUTPUTS=('.jpg','.jpeg','.png','.tif','.tiff')
+
+def write_tiff(dest,pixels,icc):
+    """A 16-bit (or 8-bit) RGB TIFF with the sRGB profile embedded, losslessly compressed (deflate with
+    a horizontal predictor), and nothing time-dependent in it, so the same pixels give the same file."""
+    tifffile.imwrite(dest,np.ascontiguousarray(pixels),photometric='rgb',compression='zlib',predictor=True,
+                     iccprofile=icc,software=None,metadata=None)
+
 def srgb_icc():
     """The embedded sRGB profile, with a fixed creation date so a conversion is byte-reproducible.
 
@@ -116,7 +124,8 @@ def slide_lut(model,low,high):
     srgb=np.where(linear<=.0031308,12.92*linear,1.055*np.maximum(linear,0)**(1/2.4)-.055)
     table[:]=np.rint(np.clip(srgb,0,1)*65535).astype(np.uint16);return table
 
-def render(raw,lut,contrast=1.3,gamma=1.0,warmth=0.0):
+def render(raw,lut,contrast=1.3,gamma=1.0,warmth=0.0,top=255):
+    """Viewing pixels from raw RGB16 through the LUT; top: 255 for 8-bit output, 65535 for 16-bit."""
     if not (.1<=contrast<=4 and .1<=gamma<=4 and -1<=warmth<=1):raise ValueError('Contrast/gamma must be 0.1–4; warmth must be -1–1.')
     a=np.stack([lut[raw[:,:,c],c] for c in range(3)],2).astype(float)/65535
     weights=np.array([.2126,.7152,.0722]);L=np.sum(a*weights,2,keepdims=True)
@@ -124,7 +133,7 @@ def render(raw,lut,contrast=1.3,gamma=1.0,warmth=0.0):
         strength=np.clip((.98-L)/.18,0,1);a*=1+strength*(np.array([.08,0,-.12])*warmth)
         a*=L/np.maximum(np.sum(a*weights,2,keepdims=True),1e-10)
     v=np.clip(L,0,1);up=v**contrast;down=(1-v)**contrast;target=(up/(up+down))**(1/gamma)
-    return np.rint(np.clip(a*target/np.maximum(L,1e-10),0,1)*255).astype(np.uint8)
+    return np.rint(np.clip(a*target/np.maximum(L,1e-10),0,1)*top).astype(np.uint8 if top==255 else np.uint16)
 
 def capture_metadata(source):
     """A capture record in the shape conversion reads: film-scan's as-is, the kit's mapped onto it."""
@@ -135,10 +144,12 @@ def capture_metadata(source):
 
 def convert(args,root=film_stocks.DATA):
     source=Path(args.source).expanduser().resolve();dest=Path(args.output).expanduser().resolve()
-    if source==dest or dest.suffix.lower() not in ('.jpg','.jpeg','.png'):raise ValueError('Choose a separate JPEG or PNG viewing-copy destination.')
+    if source==dest or dest.suffix.lower() not in OUTPUTS:raise ValueError('Choose a separate JPEG, PNG or TIFF destination.')
+    deep=dest.suffix.lower() in ('.tif','.tiff');top=65535 if deep else 255
     recipe=Path(str(dest)+'.json');lutfile=Path(str(dest)+'.lut.npy');scratch=Path(str(dest)+'.rgb.partial')
     for p in [dest,recipe,lutfile,scratch]:
         if p.exists():raise ValueError('Refusing to overwrite '+str(p))
+    if args.max_side is None:args.max_side=0 if deep else 1800   # a TIFF is a master: full size by default
     if args.max_side<0:raise ValueError('--max-side must be zero (full size) or positive')
     meta=capture_metadata(source)
     roll_dir=Path(args.roll).expanduser().resolve() if args.roll else rolls.containing(source)
@@ -180,19 +191,21 @@ def convert(args,root=film_stocks.DATA):
     else:lut=slide_lut(model,lo,hi) if film=='slide' else make_lut(model,lo,hi)
     stride=1 if args.max_side==0 else max(1,math.ceil(max(area.shape[:2])/args.max_side));view=area[::stride,::stride];hh,ww=view.shape[:2]
     dest.parent.mkdir(parents=True,exist_ok=True)
-    pixels=np.memmap(scratch,mode='w+',dtype='uint8',shape=(hh,ww,3))
+    pixels=np.memmap(scratch,mode='w+',dtype='uint16' if deep else 'uint8',shape=(hh,ww,3))
     try:
         for start in range(0,hh,64):
             if calibrated:
                 if args.warmth:raise ValueError('Use neutral scene anchors instead of warmth with density calibration.')
-                pixels[start:start+64]=film_density.render_density(view[start:start+64],lut,args.contrast,args.gamma,calibrated['recover_clipped_blue'])
-            else:pixels[start:start+64]=render(view[start:start+64],lut,args.contrast,args.gamma,args.warmth)
-        pixels.flush();im=Image.fromarray(pixels);icc=srgb_icc()
-        im.save(dest,icc_profile=icc,**({'quality':95,'subsampling':0} if dest.suffix.lower()!='.png' else {}));del im
+                pixels[start:start+64]=film_density.render_density(view[start:start+64],lut,args.contrast,args.gamma,calibrated['recover_clipped_blue'],top)
+            else:pixels[start:start+64]=render(view[start:start+64],lut,args.contrast,args.gamma,args.warmth,top)
+        pixels.flush();icc=srgb_icc()
+        if deep:write_tiff(dest,pixels,icc)
+        else:
+            im=Image.fromarray(pixels);im.save(dest,icc_profile=icc,**({'quality':95,'subsampling':0} if dest.suffix.lower()!='.png' else {}));del im
     finally:
         del pixels;scratch.unlink(missing_ok=True)
     np.save(lutfile,lut)
-    record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,output_dimensions=[ww,hh],source_dimensions=[w,h],output=str(dest),output_sha256=sha(dest),output_bits_per_channel=8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(lutfile),raw_tiffs_modified=False,approved=False,generative_processing=False)
+    record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,output_dimensions=[ww,hh],source_dimensions=[w,h],output=str(dest),output_sha256=sha(dest),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(lutfile),raw_tiffs_modified=False,approved=False,generative_processing=False)
     if calibrated:record['density_calibration']=calibrated
     if sha(source)!=digest:raise RuntimeError('Source checksum changed during conversion.')
     recipe.write_text(json.dumps(record,indent=2)+'\n')

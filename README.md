@@ -36,7 +36,8 @@ recipe beside it that says exactly how it was made.
 
 - `scan --full-area` scans the driver's whole area instead of its default selection.
 - `convert` picks the film's response curve from `openfilmkit stocks` / `openfilmkit profiles`
-  (142 profiles digitized from manufacturers' data sheets).
+  (142 profiles digitized from manufacturers' data sheets). `--tiff` writes a 16-bit TIFF at full
+  resolution instead of a JPEG (see below).
 - `clean` removes dust and fibers and trims film-holder edges, always on a new copy. Eyes and
   mouths, and the camera's date stamp, are left untouched by dust removal; faces are found in any
   orientation, so sideways frames are covered. Options:
@@ -47,6 +48,20 @@ recipe beside it that says exactly how it was made.
   - `--scratches` also finds scratches and larger debris with a trained model and fills them with
     a generative model (see below).
   - On a roll folder, it cleans only conversions without a copy made with the same options.
+
+### Files you get
+
+| File | From | What it is |
+|---|---|---|
+| Master | `scan` | Linear 48-bit TIFF straight from the scanner, never changed. |
+| Processed master | `convert --tiff`, then `clean` | 16-bit TIFF, sRGB with the profile embedded, lossless compression, full resolution. The file to edit, archive or upload (Immich takes it as the original). |
+| Viewing copy | `convert`, then `clean` | 8-bit JPEG for sharing and web pages; `clean` can also make one from a processed master (`--output frame.jpg`). |
+
+`clean` works on a 16-bit TIFF at full depth: it makes every decision on an 8-bit copy, exactly
+as for a JPEG, and applies color, cropping, straightening, shadows and dust fills at 16 bits, so
+smooth skies and shadows keep tens of thousands of levels instead of 256. The processed master is
+sRGB for now: until the scanner is profiled (M4 in the roadmap), conversion assumes sRGB
+primaries, so a wider color space would hold no extra color.
 
 ### Scratches
 

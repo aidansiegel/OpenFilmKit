@@ -111,6 +111,19 @@ class Conversion(unittest.TestCase):
   self.assertEqual(first['transmission_low_rgb'],second['transmission_low_rgb']);self.assertEqual(second['levels_basis']['type'],'shared')
   with self.assertRaises(ValueError):conversion.convert(self.args(output=str(self.root/'wrong.jpg'),stock='kodak-gold200',profile=None,levels_from=str(self.root/'view.jpg.json')))
   self.assertFalse((self.root/'wrong.jpg').exists())
+ def test_tiff_output_is_16_bit_full_size_and_reduces_to_the_8_bit_copy(self):
+  import tifffile
+  a=np.linspace(2000,50000,120*100*3).reshape(100,120,3).astype('uint16');tiff16(self.root/'raw.tif',a)
+  conversion.convert(self.args(output=str(self.root/'v.png'),max_side=0))
+  r=conversion.convert(self.args(output=str(self.root/'v.tif'),max_side=None))
+  with tifffile.TiffFile(self.root/'v.tif') as t:
+   page=t.pages[0];deep=page.asarray();self.assertIn(34675,page.tags)   # sRGB profile embedded
+  self.assertEqual((deep.dtype,deep.shape),(np.dtype('uint16'),(100,120,3)))   # full size by default
+  self.assertEqual(r['output_bits_per_channel'],16)
+  self.assertTrue(np.array_equal(np.rint(deep/257.).astype('uint8'),np.asarray(Image.open(self.root/'v.png'))))
+  self.assertGreater(len(np.unique(deep[...,0])),len(np.unique(np.asarray(Image.open(self.root/'v.png'))[...,0])))
+  conversion.convert(self.args(output=str(self.root/'w.tif'),max_side=None))
+  self.assertEqual((self.root/'v.tif').read_bytes(),(self.root/'w.tif').read_bytes())
  def test_conversion_is_byte_reproducible(self):
   # film-scan embedded the current time in the sRGB profile, so its files differed between runs.
   self.raw()

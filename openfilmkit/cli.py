@@ -215,7 +215,7 @@ def cmd_convert(args, out):
         roll_dir = roll.containing(source)
         if not roll_dir:
             raise Fail('choose --output (the source is not in a roll folder)')
-        args.output = str(roll.next_derived(roll_dir, source.stem))
+        args.output = str(roll.next_derived(roll_dir, source.stem, '.tif' if args.tiff else '.jpg'))
     try:
         record = convert.convert(args)
     except ValueError as e:
@@ -379,7 +379,9 @@ def parser():
     s = sub.add_parser('convert', parents=[common],
                        help='viewing copy of a color negative or slide from a linear RGB16 master')
     s.add_argument('source')
-    s.add_argument('--output', help='JPEG/PNG; default: the roll\'s derived/<frame>-vN.jpg')
+    s.add_argument('--output', help='JPEG/PNG (8-bit) or TIFF (16-bit); default: the roll\'s derived/<frame>-vN.jpg')
+    s.add_argument('--tiff', action='store_true',
+                   help='16-bit TIFF at full resolution instead of a JPEG (derived/<frame>-vN.tif)')
     s.add_argument('--stock', help='film ID from `openfilmkit stocks`; default: the roll or capture record')
     s.add_argument('--roll', help='roll folder whose film choice to use')
     s.add_argument('--profile', help='explicit numerical profile, e.g. agfa-hdc200 or generic')
@@ -389,7 +391,8 @@ def parser():
     s.add_argument('--recover-clipped-blue', action=argparse.BooleanOptionalAction, default=None,
                    help='estimate missing blue from red/green in viewing copies; raw detail stays lost')
     s.add_argument('--levels-from', help="share another conversion record's channel endpoints")
-    s.add_argument('--max-side', type=int, default=1800, help='preview bound; 0 = full resolution')
+    s.add_argument('--max-side', type=int,
+                   help='longest side in pixels; 0 = full resolution (default: 1800 for JPEG/PNG, full for TIFF)')
     s.add_argument('--contrast', type=float, help='default 1.3 for negatives, 1.0 for slides')
     s.add_argument('--gamma', type=float, default=1.0, help='above 1 lifts midtones')
     s.add_argument('--warmth', type=float, default=0.0, help='small balance adjustment, -1 to +1')
