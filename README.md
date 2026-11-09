@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/aidansiegel/OpenFilmKit/main/docs/openfilmkit-dark.svg">
+    <img src="https://raw.githubusercontent.com/aidansiegel/OpenFilmKit/main/docs/openfilmkit-light.svg" alt="OpenFilmKit: film spilling out of an open box" width="128">
+  </picture>
+</p>
+
 # OpenFilmKit
 
 Free film scanning and negative conversion from the command line, for macOS and Linux, built on

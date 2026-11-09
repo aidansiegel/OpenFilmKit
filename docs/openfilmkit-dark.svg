@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="currentColor" role="img" aria-label="OpenFilmKit">
+  <defs>
+    <path id="ofk-film-path" d="M21 52 C22 41 28 35 35 32 C43 28.5 47 22 51.5 13.5"/>
+    <!-- Single-color silhouette: white shows, black cuts the gaps that separate the parts -->
+    <mask id="ofk-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <g stroke-linejoin="round">
+        <!-- Back flaps, hinged on the back top edges and swung open -->
+        <g transform="translate(22 63) scale(0.8) translate(-22 -63)">
+          <path d="M8 30 L32 18 L27 9 L3 21 Z" fill="#fff"/>
+          <path d="M32 18 L56 30 L61 21 L37 9 Z" fill="#fff"/>
+        </g>
+
+        <!-- Film spilling out of the box, in front of the back flaps -->
+        <g fill="none" stroke-linecap="butt">
+          <use href="#ofk-film-path" stroke="#000" stroke-width="23.4"/>
+          <use href="#ofk-film-path" stroke="#fff" stroke-width="19"/>
+          <use href="#ofk-film-path" stroke="#000" stroke-width="15.4" stroke-dasharray="3.2 4" stroke-dashoffset="4.5"/>
+          <use href="#ofk-film-path" stroke="#fff" stroke-width="8.6"/>
+        </g>
+
+        <g transform="translate(22 63) scale(0.8) translate(-22 -63)">
+          <!-- Front rim: tucks the film behind the front of the box -->
+          <path d="M8 30 L32 42 L56 30" fill="none" stroke="#000" stroke-width="5.5"/>
+
+          <!-- Box sides -->
+          <path d="M8 30 L32 42 L32 60 L8 48 Z" fill="#fff"/>
+          <path d="M32 42 L56 30 L56 48 L32 60 Z" fill="#fff"/>
+          <!-- Front corner edge -->
+          <path d="M32 42 V60" stroke="#000" stroke-width="2.6"/>
+
+          <!-- Front flaps, hinged on the front top edges and folded out over the sides -->
+          <path d="M8 30 L1.5 34.5 L25.5 46.5 L32 42 M56 30 L62.5 34.5 L38.5 46.5 L32 42" fill="none" stroke="#000" stroke-width="5.5"/>
+          <path d="M8 30 L32 42 L25.5 46.5 L1.5 34.5 Z" fill="#fff"/>
+          <path d="M56 30 L32 42 L38.5 46.5 L62.5 34.5 Z" fill="#fff"/>
+        </g>
+      </g>
+    </mask>
+  </defs>
+
+  <rect width="64" height="64" fill="#f0f6fc" mask="url(#ofk-mask)"/>
+</svg>

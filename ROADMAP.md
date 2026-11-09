@@ -27,6 +27,7 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 | M6 | Packaging: Homebrew tap for macOS and Linux | Done: `brew install` tested on macOS (arm64) and Fedora (aarch64). |
 | M7 | Terminal UI (Textual) | Not started. |
 | M8 | First release | 0.1.0, an early release ahead of M4 and M7, so the kit can be installed and tried. |
+| M9 | Remote processing: run conversion and cleanup on another machine, or queue jobs for several | Planned: self-contained job packages first, then `--on HOST`, then a queue and workers. A 73 MP frame already fits in 2.5 GB. |
 
 ## Known limits
 
@@ -36,6 +37,8 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 - Two identical scanners connected at once can't be told apart (no per-unit ID).
 - `clean`'s holder crop is conservative. Without `--scratches`, a long thin scratch that breaks into
   short pieces can be removed piecemeal, leaving a faint dashed trace.
+- Soft, out-of-focus dust on busy patterns (a ribbon bar, foliage) is mostly left in place; it's
+  marked as an expected failure in the tests. `clean --spot` fills what's left by hand.
 
 ## Open questions
 
