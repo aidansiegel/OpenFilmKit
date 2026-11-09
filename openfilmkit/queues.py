@@ -201,12 +201,11 @@ def outbox(q):
     return _cache() / 'queues' / q['name'] / 'outbox'
 
 
-def _remote(q, *command):
+def _remote(q, *command, quiet=False):
     """Run a command in the queue's machine (or here, for a local queue)."""
     host, _ = _split(q['queue'])
-    if host is None:
-        return subprocess.run(list(command)).returncode == 0
-    return subprocess.run(shlex.split(q['ssh_command']) + [host, shlex.join(command)]).returncode == 0
+    argv = list(command) if host is None else shlex.split(q['ssh_command']) + [host, shlex.join(command)]
+    return subprocess.run(argv, stderr=subprocess.DEVNULL if quiet else None).returncode == 0
 
 
 def _path(q, *parts):
@@ -313,7 +312,7 @@ def collect(q, to=None, say=print):
                 record = candidate
                 break
             say(f'{jid[:12]}: the result from {worker} does not check out; turning it down')
-            if not _remote(q, 'rm', '-rf', '--', _path(q, 'drop', worker, 'results', jid)):
+            if not _remote(q, 'rm', '-rf', '--', _path(q, 'drop', worker, 'results', jid), quiet=True):
                 _reject(q, view, jid, worker, package)
         if record is None:
             out.append({'id': jid, 'error': 'no result checked out; the job is free to run again'})
@@ -328,7 +327,7 @@ def collect(q, to=None, say=print):
         paths = [_path(q, 'drop', w, sub, jid) for w in view.drops for sub in ('results', 'checkpoints')]
         paths += [_path(q, 'drop', w, 'failed', f'{jid}.json') for w in view.drops]
         if paths:
-            _remote(q, 'rm', '-rf', '--', *paths)
+            _remote(q, 'rm', '-rf', '--', *paths, quiet=True)
         shutil.rmtree(package, ignore_errors=True)
         for record in records:
             say(f"{jid[:12]}: {record['output']} (from {record.get('job', {}).get('ran_on')})")
