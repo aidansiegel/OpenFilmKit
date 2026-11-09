@@ -17,6 +17,9 @@ except ImportError:
     clean = None
 from openfilmkit import cli, roll
 
+# Eileen Collins, NASA (public domain), as scikit-image ships it for tests: https://flic.kr/p/r9qvLn
+ASTRONAUT = Path(__file__).resolve().parent / 'fixtures' / 'astronaut.jpg'
+
 
 def scene(w=900, h=600, seed=3):
     """A smooth, slightly noisy photo-like gradient."""
@@ -70,7 +73,28 @@ class Clean(unittest.TestCase):
 
     def test_recipe_names_the_face_detector(self):
         dust = [s for s in clean.clean(self.write(scene()), crop=False)['steps'] if s['step'] == 'dust'][0]
-        self.assertIn('Haar', dust['face_detector'])
+        self.assertIn('YuNet', dust['face_detector'])
+
+    def test_face_is_found_at_every_rotation(self):
+        # Film frames are often scanned sideways. ASTRONAUT is 512 px square, face near the top middle.
+        img = np.asarray(Image.open(ASTRONAUT).convert('RGB'))
+        for turns in range(4):
+            faces = clean.find_faces(np.ascontiguousarray(np.rot90(img, turns)))
+            self.assertEqual(len(faces), 1, turns)
+            # Back in the upright photo's coordinates, every rotation agrees on where the face is.
+            back = clean._unrotate([faces[0]['box'][:2], faces[0]['box'][2:]], turns, np.rot90(img, turns).shape)
+            x0, y0 = back.min(0)
+            x1, y1 = back.max(0)
+            self.assertTrue(170 < x0 < 190 and 55 < y0 < 75 and 260 < x1 < 280 and 165 < y1 < 185, (turns, back))
+
+    def test_only_eyes_and_mouth_are_protected(self):
+        img = np.asarray(Image.open(ASTRONAUT).convert('RGB'))
+        face = clean.find_faces(img)[0]
+        m = restore.feature_mask(img.shape, [face])
+        for x, y in face['kps'][:2] + face['kps'][3:]:   # eyes and mouth corners
+            self.assertTrue(m[int(y), int(x)])
+        x0, y0, x1, y1 = face['box']
+        self.assertLess(m[int(y0):int(y1), int(x0):int(x1)].mean(), 0.5)   # cheeks and forehead stay open
 
     def test_whole_face_box_is_protected_without_landmarks(self):
         m = restore.feature_mask((100, 100, 3), [{'box': [20, 30, 60, 80]}])

@@ -5,10 +5,12 @@ stamp and faces, remove dust from the original, optionally fix color, then crop.
 adjustments and red eye come after. Nothing is invented: dust is filled only from its immediate
 surroundings (OpenCV inpainting), and there is no generative fill.
 
-Faces are found with OpenCV's bundled Haar cascades (no model download). They give face boxes but
-not landmarks, so whole faces are protected from dust removal, where the archive pipeline (with
-InsightFace landmarks) protected only eyes and mouths. Eyes for red-eye come from OpenCV's eye
-cascade inside each face.
+Faces are found with YuNet, a small face detector built into OpenCV (model bundled in data/, MIT
+license, from the OpenCV Zoo). It gives five landmarks per face, so, as in the archive pipeline,
+only eyes and mouths are protected from dust removal and the rest of the face is cleaned. It looks
+at all four rotations, because film frames are often scanned sideways: on photos turned 90 degrees,
+upright-only YuNet found 12% of faces, four turns 97% (154 archive photos, measured against the
+archive pipeline's InsightFace detector; OpenCV's older Haar cascades found 32%).
 
 Needs OpenCV (opencv-python-headless), numpy and Pillow.
 """
@@ -26,8 +28,11 @@ from . import redeye, restore
 
 Image.MAX_IMAGE_PIXELS = None
 DETECT_SIDE = 1200
+FACE_MODEL = Path(__file__).resolve().parents[1] / 'data' / 'face_detection_yunet_2023mar.onnx'
+FACE_SCORE = 0.6
 # Recorded in each recipe, so a cleaned copy says what decided which faces were spared.
-FACE_DETECTOR = "OpenCV Haar cascades (frontal face, eyes), on a copy 1200 px on its long side"
+FACE_DETECTOR = (f'YuNet ({FACE_MODEL.name}, OpenCV Zoo) on a copy {DETECT_SIDE} px on its long side, '
+                 f'all four rotations, score >= {FACE_SCORE}')
 
 
 class CleanError(Exception):
@@ -39,27 +44,46 @@ def sha(path):
         return hashlib.file_digest(f, 'sha256').hexdigest()
 
 
+def _unrotate(pts, turns, shape):
+    """Points found in np.rot90(img, turns), whose shape is `shape`, back in img's coordinates."""
+    pts = np.asarray(pts, float)
+    h, w = shape[:2]
+    for _ in range(turns):   # one turn back: (x, y) -> (h - 1 - y, x)
+        pts = np.stack([h - 1 - pts[:, 1], pts[:, 0]], 1)
+        h, w = w, h
+    return pts
+
+
+def _overlap(a, b):
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+    return ix * iy / smaller if smaller > 0 else 0.0
+
+
 def find_faces(img):
-    """[{'box': [x0, y0, x1, y1], 'eyes': [[x, y], [x, y]]}] in pixels; eyes ordered left, right,
-    present only when two are found in the face's upper half."""
+    """[{'box': [x0, y0, x1, y1], 'kps': [[x, y] x 5], 'score'}] in pixels, best first. kps are the
+    eyes, nose tip and mouth corners (eyes first, as restore.feature_mask and redeye expect)."""
     h, w = img.shape[:2]
     s = min(1.0, DETECT_SIDE / max(h, w))
-    gray = cv2.cvtColor(cv2.resize(img, (round(w * s), round(h * s)), interpolation=cv2.INTER_AREA)
-                        if s < 1 else img, cv2.COLOR_RGB2GRAY)
-    gray = cv2.equalizeHist(gray)
-    face_cc = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    eye_cc = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-    least = max(24, int(min(gray.shape) * 0.03))
-    faces = []
-    for x, y, fw, fh in face_cc.detectMultiScale(gray, 1.1, 5, minSize=(least, least)):
-        face = {'box': [round(x / s), round(y / s), round((x + fw) / s), round((y + fh) / s)]}
-        upper = gray[y:y + fh // 2, x:x + fw]
-        eyes = eye_cc.detectMultiScale(upper, 1.1, 5, minSize=(max(6, fw // 10),) * 2)
-        if len(eyes) >= 2:
-            eyes = sorted(sorted(eyes, key=lambda e: -e[2] * e[3])[:2], key=lambda e: e[0])
-            face['eyes'] = [[round((x + ex + ew / 2) / s), round((y + ey + eh / 2) / s)]
-                            for ex, ey, ew, eh in eyes]
-        faces.append(face)
+    small = cv2.resize(img, (round(w * s), round(h * s)), interpolation=cv2.INTER_AREA) if s < 1 else img
+    bgr = np.ascontiguousarray(small[:, :, ::-1])
+    found = []
+    for turns in range(4):
+        view = np.ascontiguousarray(np.rot90(bgr, turns))
+        det = cv2.FaceDetectorYN.create(str(FACE_MODEL), '', (view.shape[1], view.shape[0]), FACE_SCORE, 0.3, 5000)
+        _, faces = det.detect(view)
+        for f in [] if faces is None else faces:
+            x, y, fw, fh = (float(v) for v in f[:4])
+            pts = _unrotate([[x, y], [x + fw, y], [x, y + fh], [x + fw, y + fh]]
+                            + [[float(f[4 + 2 * i]), float(f[5 + 2 * i])] for i in range(5)], turns, view.shape) / s
+            found.append({'box': [round(float(v), 1) for v in (*pts[:4].min(0), *pts[:4].max(0))],
+                          'kps': [[round(float(x), 1), round(float(y), 1)] for x, y in pts[4:]],
+                          'score': round(float(f[14]), 3)})
+    faces = []   # the same face seen in more than one rotation counts once, at its best score
+    for f in sorted(found, key=lambda f: -f['score']):
+        if all(_overlap(f['box'], g['box']) < 0.5 for g in faces):
+            faces.append(f)
     return faces
 
 
@@ -114,8 +138,7 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
     stamp = restore.stamp_mask(img)
     faces = find_faces(img) if protect_faces else []
     if dust:
-        # Boxes only: feature_mask protects the whole face when it has no landmarks.
-        protect = stamp | restore.feature_mask(img.shape, [{'box': f['box']} for f in faces])
+        protect = stamp | restore.feature_mask(img.shape, faces)   # eyes and mouths
         mask = restore.dust_mask(img, protect=protect)
         cleaned = restore.remove_dust(img, mask)
         steps.append({'step': 'dust', 'pixels_filled': int(mask.sum()),
@@ -138,8 +161,8 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         cleaned = restore.lift_shadows(cleaned, gamma=lift_shadows)
         steps.append({'step': 'lift_shadows', 'gamma': lift_shadows})
     if red_eye:
-        found = [f for f in find_faces(cleaned) if 'eyes' in f]
-        cleaned, fixed = redeye.correct(cleaned, [{'box': f['box'], 'kps': f['eyes']} for f in found])
+        found = find_faces(cleaned)
+        cleaned, fixed = redeye.correct(cleaned, found)
         steps.append({'step': 'red_eye', 'faces_with_eyes': len(found),
                       'eyes_corrected': [list(e) for e in fixed]})
 

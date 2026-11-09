@@ -37,8 +37,9 @@ recipe beside it that says exactly how it was made.
 - `scan --full-area` scans the driver's whole area instead of its default selection.
 - `convert` picks the film's response curve from `openfilmkit stocks` / `openfilmkit profiles`
   (142 profiles digitized from manufacturers' data sheets).
-- `clean` removes dust and fibers and trims film-holder edges, always on a new copy. Faces and the
-  camera's date stamp are left untouched by dust removal. Options:
+- `clean` removes dust and fibers and trims film-holder edges, always on a new copy. Eyes and
+  mouths, and the camera's date stamp, are left untouched by dust removal; faces are found in any
+  orientation, so sideways frames are covered. Options:
   - `--no-dust` trims holder edges only; run `clean` again later for dust.
   - `--no-crop` keeps the holder edges; `--no-faces` skips face detection.
   - `--color` also corrects levels and color cast; `--straighten DEGREES`, `--lift-shadows GAMMA`
@@ -74,6 +75,9 @@ descriptors, so settings meant for one hardware revision are never used on anoth
   (M. D. Grossberg and S. K. Nayar, "Modeling the Space of Camera Response Functions", IEEE PAMI 2004).
   Each profile records its source, page and SHA-256; see `docs/FILM-STOCK-RESEARCH.md` and
   `tools/research/datasheets.json`. The data sheets themselves are not included.
+- Face detection: YuNet (Shiqi Yu and others), `face_detection_yunet_2023mar.onnx` from the
+  [OpenCV Zoo](https://github.com/opencv/opencv_zoo), MIT license
+  (`openfilmkit/data/face_detection_yunet_LICENSE`), run through OpenCV.
 - Scanner and model tables: generated from [SANE](http://www.sane-project.org/) (sane-backends,
   GPL-2.0-or-later with the SANE exception) at the commit in `packaging/sane-pin.json`.
 
