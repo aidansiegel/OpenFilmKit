@@ -254,7 +254,7 @@ def cmd_clean(args, out):
     options = dict(crop=args.crop, dust=args.dust, protect_faces=args.faces, color=args.color,
                    straighten=args.straighten, lift_shadows=args.lift_shadows, red_eye=args.red_eye,
                    scratches=args.scratches, spare_long_lines=args.spare_long_lines, spots=args.spot)
-    if args.pack or args.on:
+    if args.pack or args.on or args.queue:
         return pack_clean(sources, args, options, out)
     from . import jobs
     records = []
@@ -278,11 +278,15 @@ def cmd_clean(args, out):
 
 
 def pack_clean(sources, args, options, out):
-    """clean --pack, or --on HOST (pack, then run there)."""
-    from . import jobs, remote
-    if args.pack and args.on:
-        raise Fail('choose --pack or --on, not both')
-    into = args.pack or remote.outbox(args.on)
+    """clean --pack, --on HOST (pack, then run there) or --queue NAME (pack, then queue)."""
+    from . import jobs, queues, remote
+    if sum(bool(x) for x in (args.pack, args.on, args.queue)) > 1:
+        raise Fail('choose one of --pack, --on and --queue')
+    try:
+        q = queues.queue_settings(args.queue) if args.queue else None
+    except queues.QueueError as e:
+        raise Fail(str(e))
+    into = args.pack or (queues.outbox(q) if q else remote.outbox(args.on))
     packed = []
     for source in sources:
         try:
@@ -294,6 +298,11 @@ def pack_clean(sources, args, options, out):
         if args.pack:
             out.say(f'{source.name} → job {package.name[:12]} in {package.parent}')
         packed.append({'source': str(source), 'package': str(package), 'id': package.name})
+    if q and any('error' not in p for p in packed):
+        try:
+            queues.submit(q, list(dict.fromkeys(p['package'] for p in packed if 'error' not in p)), say=out.say)
+        except queues.QueueError as e:
+            raise Fail(str(e))
     if args.on and any('error' not in p for p in packed):
         ready = [p['package'] for p in packed if 'error' not in p]
         to = Path(args.output).expanduser().resolve().parent if args.output else None
@@ -345,6 +354,57 @@ def cmd_job(args, out):
         records.append(record)
     out.result(records)
     return 0 if all('error' not in r for r in records) else 1
+
+
+def cmd_queue(args, out):
+    from . import queues
+    import time as clock
+    try:
+        q = queues.queue_settings(args.name)
+        if args.queue_command == 'collect':
+            records = queues.collect(q, args.to, say=out.say)
+            if not records:
+                out.say('Nothing finished to collect.')
+            out.result(records)
+            return 0 if all('error' not in r for r in records) else 1
+        info = queues.status(q)
+    except queues.QueueError as e:
+        raise Fail(str(e))
+    out.say(f"Queue {info['queue']}: {len(info['jobs'])} job{'s' if len(info['jobs']) != 1 else ''}")
+    for row in info['jobs']:
+        where = f" on {row['worker']}" if row.get('worker') else ''
+        extra = f": {row['error']}" if row.get('error') else ''
+        out.say(f"  {row['id'][:12]}  {row['state']}{where}  {Path(row['photo'] or '').name} → {row['output']}{extra}")
+    for w in info['workers']:
+        busy = f", running {w['running'][:12]}" if w.get('running') else ''
+        out.say(f"  worker {w['name']}: {w.get('version')}, up to {w.get('memory_gb')} GB, "
+                f"hours {w.get('hours') or 'any'}, seen {w['seen_ago_s']} s ago{busy}")
+    out.result(info)
+    return 0
+
+
+def cmd_worker(args, out):
+    from . import queues
+    import signal
+    try:
+        s = queues.worker_settings(queue=args.queue, drop=args.drop, name=args.name, memory_gb=args.memory,
+                                   hours=args.hours, ssh_command=args.ssh_command)
+    except queues.QueueError as e:
+        raise Fail(str(e))
+
+    def stop(signum, frame):   # systemd's stop: like Ctrl-C, so the slow work is pushed and the claim let go
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
+    w = queues.Worker(s, say=out.say)
+    out.say(f"Worker {s['name']}: {s['queue']}, up to {s['memory_gb']} GB, hours {s['hours'] or 'any'}")
+    try:
+        if args.once:
+            jid = w.once()
+            out.result({'job': jid})
+            return 0
+        w.forever()
+    except queues.QueueError as e:
+        raise Fail(str(e))
 
 
 def spot(text):
@@ -513,6 +573,9 @@ def parser():
     s.add_argument('--on', metavar='HOST',
                    help='clean on another machine over SSH (same OpenFilmKit version there) and bring the '
                         'results back; running it again resumes a stopped run')
+    s.add_argument('--queue', metavar='NAME',
+                   help='put the work in a queue for workers to do (a queue named in hosts.toml); '
+                        '`openfilmkit queue collect` brings the results back')
     s.add_argument('--keep-remote', action='store_true',
                    help="with --on: keep the job packages afterwards (here and on the host)")
 
@@ -526,6 +589,22 @@ def parser():
                      help="copy a finished job's result and recipe out, beside the original by default")
     s.add_argument('package')
     s.add_argument('--to', metavar='DIR', help='folder to copy into')
+    qp = sub.add_parser('queue', help='a job queue several machines work from').add_subparsers(
+        dest='queue_command', required=True)
+    s = qp.add_parser('status', parents=[common], help='jobs in the queue and the workers taking them')
+    s.add_argument('name', nargs='?', help='the queue (default: the only one in hosts.toml)')
+    s = qp.add_parser('collect', parents=[common],
+                      help='bring finished jobs back beside their originals and clear them from the queue')
+    s.add_argument('name', nargs='?', help='the queue (default: the only one in hosts.toml)')
+    s.add_argument('--to', metavar='DIR', help='folder to copy into instead')
+    s = sub.add_parser('worker', parents=[common], help='take jobs from a queue and do them, one at a time')
+    s.add_argument('--queue', metavar='HOST:PATH', help='the queue folder (default: [worker] in hosts.toml)')
+    s.add_argument('--drop', metavar='HOST:PATH', help="this worker's drop folder (default: QUEUE/drop/NAME)")
+    s.add_argument('--name', help="this worker's name (default: the machine's)")
+    s.add_argument('--memory', type=float, metavar='GB', help='largest job to take, in GB (default 2.5)')
+    s.add_argument('--hours', metavar='START-END', help='only start jobs in these hours, e.g. 22-7')
+    s.add_argument('--ssh-command', help='ssh command for rsync, e.g. "ssh -i ~/.ssh/queue_key"')
+    s.add_argument('--once', action='store_true', help='do at most one job, then stop')
     s = j.add_parser('remove', parents=[common], help='delete job packages (checked to be packages first)')
     s.add_argument('packages', nargs='+')
 
@@ -565,7 +644,8 @@ def cmd_models(args, out):
 
 COMMANDS = {'doctor': cmd_doctor, 'scanners': cmd_scanners, 'options': cmd_options,
             'scan': cmd_scan, 'stocks': cmd_stocks, 'profiles': cmd_profiles,
-            'convert': cmd_convert, 'clean': cmd_clean, 'models': cmd_models, 'job': cmd_job}
+            'convert': cmd_convert, 'clean': cmd_clean, 'models': cmd_models, 'job': cmd_job,
+            'queue': cmd_queue, 'worker': cmd_worker}
 
 
 def _pipe_error(e):

@@ -120,9 +120,43 @@ are only copied back, and a photo that was under way picks up where it stopped. 
 keeps the job packages afterwards, which are otherwise deleted on both machines once each result
 is back and checked.
 
+### Queues and workers
+
+For more than one machine, or a machine that should work through the night on its own, put the
+work in a queue: a folder on any machine reachable over SSH (or a mounted path). Workers take
+jobs from it one at a time, and you collect the results when it suits you:
+
+```sh
+openfilmkit clean roll-07 --scratches --queue home   # pack the photos into the queue
+openfilmkit queue status                             # what's waiting, running, done; which workers
+openfilmkit queue collect                            # results beside the originals; queue cleared
+```
+
+On each machine that should do the work, run `openfilmkit worker`, as a service
+(`packaging/openfilmkit-worker.service`). In `~/.config/openfilmkit/hosts.toml`:
+
+```toml
+[queues.home]                        # on the machine you submit and collect from
+queue = "server:openfilmkit-queue"   # host:path, or a local path
+
+[worker]                             # on a worker
+queue = "server:openfilmkit-queue"
+memory_gb = 2.5                      # largest job it takes (and only if the machine has it free)
+hours = "22-7"                       # start jobs only overnight (optional)
+```
+
+A worker takes the oldest job it can do: packed by its OpenFilmKit version, an estimated memory
+need it can meet, inside its hours. It claims the job and renews the claim every two minutes; a
+claim not renewed for ten minutes lapses, and the next worker starts from the slow stages the
+last one pushed (the scratch model's results and every filled window), so a machine that dies or
+is switched off loses at most a few minutes of work. Workers only ever use rsync: each reads the
+queue and writes only its own `drop/<name>/` folder, so it can have an SSH key restricted to that
+(with `rrsync`). Collecting checks every result against its recipe and job before taking it;
+one that doesn't check out is deleted, and the job runs again.
+
 ### Job packages
 
-`--on` works with job packages, which can also be made and moved by hand. `clean --pack DIR`
+`--on` and `--queue` work with job packages, which can also be made and moved by hand. `clean --pack DIR`
 doesn't clean: it writes one job package per photo into `DIR`, a folder that holds the photo, the
 options and nothing else it depends on. Copy the packages anywhere OpenFilmKit is installed and
 run them there, then bring the results back:
@@ -146,8 +180,7 @@ model's probabilities, the scratch mask and every window MI-GAN has filled are s
 package as they're finished (`work/checkpoints/`), so the next `job run`, on this machine or on
 whichever machine the package goes to, goes on from there. The result is the same, byte for byte,
 as a run that never stopped. The recipe lists the stages that were picked up and the machine that
-did them, and the checkpoints are deleted once the job is done. `job remove` deletes packages. A
-shared queue that several machines take jobs from is next (see ROADMAP.md).
+did them, and the checkpoints are deleted once the job is done. `job remove` deletes packages.
 
 ## Scans from SilverFast or VueScan
 

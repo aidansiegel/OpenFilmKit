@@ -101,8 +101,33 @@ def clean_job(source, output=None, **options):
         from . import models
         job['models'] = {k: m['sha256'] for k, m in models.MODELS.items()}
     about = {'source': str(source), 'output_name': name, 'input_name': source.name,
-             'packed_utc': _now(), 'packed_on': socket.gethostname()}
+             'packed_utc': _now(), 'packed_on': socket.gethostname(), 'megapixels': megapixels(source)}
     return job, about
+
+
+def megapixels(path):
+    """The image's size in megapixels, read from its header (for estimating a job's memory)."""
+    try:
+        if Path(path).suffix.lower() in ('.tif', '.tiff'):
+            import tifffile
+            with tifffile.TiffFile(path) as tif:
+                h, w = tif.pages[0].shape[:2]
+        else:
+            from PIL import Image
+            with Image.open(path) as im:
+                w, h = im.size
+        return round(w * h / 1e6, 2)
+    except Exception:   # unreadable here: clean will say why when it runs
+        return None
+
+
+def memory_needed(job, about):
+    """Estimated peak memory of a job in GB, from its size and options: measured at 73 MP, about
+    2.4 GB with --scratches (most of it the scratch model) and 1.4 GB without."""
+    mp = about.get('megapixels') or 25
+    if job.get('options', {}).get('scratches'):
+        return round(1.6 + 0.012 * mp, 2)
+    return round(0.3 + 0.015 * mp, 2)
 
 
 CHECKPOINT_DAYS = 14

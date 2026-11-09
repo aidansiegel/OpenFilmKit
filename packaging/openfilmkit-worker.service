@@ -1,0 +1,21 @@
+# A systemd user service for `openfilmkit worker` (see README.md, "Queues and workers").
+#   cp packaging/openfilmkit-worker.service ~/.config/systemd/user/
+#   (set ExecStart to where openfilmkit is, and the worker's settings in ~/.config/openfilmkit/hosts.toml)
+#   systemctl --user daemon-reload && systemctl --user enable --now openfilmkit-worker
+#   loginctl enable-linger      # keep it running when nobody is logged in
+[Unit]
+Description=OpenFilmKit worker: takes jobs from a queue and does them one at a time
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/openfilmkit worker
+Restart=on-failure
+RestartSec=60
+# Below everything else, and capped: a job that would need more is left for another worker.
+Nice=19
+MemoryMax=2.8G
+# On stop the worker pushes a job's slow stages and lets go of its claim, so give it time.
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target
