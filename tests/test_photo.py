@@ -277,6 +277,27 @@ class HopperPortrait(unittest.TestCase):
         self.assertLess(after, 0.5 * before)
         self.assertLess(int(mask[sc.skin_area(self.img, self.faces)].sum()), 30)   # her face is left alone
 
+    def arm_crook(self):
+        """The sliver of light blue backdrop seen through the crook of her left arm (about 5 x 18 px
+        at 816, 1149): a bright blob on the dark uniform that is picture, not dust."""
+        hsv = cv2.cvtColor(self.img, cv2.COLOR_RGB2HSV)
+        gray = cv2.cvtColor(self.img, cv2.COLOR_RGB2GRAY)
+        blue = ((hsv[..., 0] > 95) & (hsv[..., 0] < 125) & (hsv[..., 1] > 60) & (gray > 90)).astype(np.uint8)
+        n, lab, st, cen = cv2.connectedComponentsWithStats(blue, connectivity=8)
+        i = [k for k in range(1, n) if abs(cen[k][0] - 816) < 8 and abs(cen[k][1] - 1149) < 8]
+        self.assertEqual(len(i), 1)
+        return cv2.dilate((lab == i[0]).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+
+    def test_the_backdrop_through_the_crook_of_her_arm_is_kept(self):
+        sliver = self.arm_crook()
+        mask = restore.dust_mask(self.img, protect=self.protect)
+        self.assertEqual(int(mask[sliver].sum()), 0)
+        if have_models():
+            src = self.root / 'clean.png'
+            Image.fromarray(self.img).save(src)
+            out = np.asarray(Image.open(clean.clean(src, crop=False, scratches=True)['output']).convert('RGB'))
+            self.assertTrue((out[sliver] == self.img[sliver]).all())
+
     def test_the_film_dust_is_real_and_visible(self):
         self.assertGreaterEqual(len(self.pieces), 15)
         self.assertGreaterEqual(sum(lift >= 30 for _, lift in self.pieces), 5)
@@ -288,16 +309,44 @@ class HopperPortrait(unittest.TestCase):
         before = np.abs(self.damaged[spots].astype(int) - self.img[spots]).mean()
         self.assertLessEqual(np.abs(out[spots].astype(int) - self.img[spots]).mean(), before)
 
+    def clear_pieces(self, plain):
+        """Film dust at least 30 levels brighter than the photo, outside the protected eyes and
+        mouth, on plain ground (no fine texture or shading round it) or not."""
+        g = cv2.cvtColor(self.img, cv2.COLOR_RGB2GRAY).astype(np.float32)
+        fine = g - cv2.GaussianBlur(g, (0, 0), 1.5)
+        local = np.sqrt(np.maximum(cv2.blur(fine * fine, (15, 15)) - cv2.blur(fine, (15, 15)) ** 2, 0))
+        m31 = cv2.blur(g, (31, 31))
+        shading = np.sqrt(np.maximum(cv2.blur(g * g, (31, 31)) - m31 * m31, 0))
+        out = []
+        for m, lift in self.pieces:
+            if lift < 30 or (m & self.protect).any():
+                continue
+            around = cv2.dilate(m.astype(np.uint8), np.ones((15, 15), np.uint8)) > 0
+            is_plain = np.median(local[around]) < 2.5 and np.median(shading[around]) < 6
+            if is_plain == plain:
+                out.append(m)
+        return out
+
+    @unittest.skipUnless(have_models(), 'needs the scratch models (openfilmkit models --fetch)')
+    def test_soft_film_dust_on_plain_ground_is_mostly_removed(self):
+        # Two of the three pieces on the plain backdrop and flag go (the scratch model takes them);
+        # the third is a soft 6 x 9 px blob the dust pass measures against its own median.
+        changed = np.abs(self.cleaned().astype(int) - self.damaged).max(axis=2) > 0
+        plain = self.clear_pieces(plain=True)
+        self.assertGreaterEqual(len(plain), 3)
+        self.assertGreaterEqual(sum(changed[m].mean() >= 0.5 for m in plain), len(plain) - 1)
+
     @unittest.expectedFailure
     @unittest.skipUnless(have_models(), 'needs the scratch models (openfilmkit models --fetch)')
-    def test_clearly_visible_soft_dust_is_found(self):
-        # Known gap (Nov 2026): this scan's dust is soft, out-of-focus blobs. Of the 7 pieces at
-        # least 30 levels brighter than the photo, clean finds 3: the dust pass wants small sharp
-        # specks, and the scratch model was trained on scratches. When this passes, remove the marker.
-        out = self.cleaned()
-        changed = np.abs(out.astype(int) - self.damaged).max(axis=2) > 0
-        clear = [m for m, lift in self.pieces if lift >= 30]
-        self.assertGreaterEqual(sum(changed[m].mean() >= 0.5 for m in clear), len(clear) - 1)
+    def test_soft_film_dust_on_busy_patterns_is_found(self):
+        # Known gap (Nov 2026): soft, out-of-focus dust on busy, colorful patterns (her ribbon bar)
+        # stays. Every dust rule leaves blobs on busy ground alone, because there a blob is as likely
+        # to be picture; rules on size, softness and keeping the color (dust on a negative brightens
+        # a spot without changing its color) did not separate the two on this portrait. When this
+        # passes, remove the marker.
+        changed = np.abs(self.cleaned().astype(int) - self.damaged).max(axis=2) > 0
+        busy = self.clear_pieces(plain=False)
+        self.assertGreaterEqual(sum(changed[m].mean() >= 0.5 for m in busy), len(busy) - 1)
 
 
 if __name__ == '__main__':

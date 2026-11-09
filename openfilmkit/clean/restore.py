@@ -79,17 +79,27 @@ def find_crop(img, max_fraction=0.08, margin_fraction=0.002, sliver_fraction=0.0
 # ---------------------------------------------------------------- date stamp and protection
 
 def stamp_mask(img):
-    """Pixels of the camera's orange-red LED date stamp (plus a margin), to leave untouched."""
+    """Pixels of the camera's orange-red LED date stamp (plus a margin), to leave untouched.
+
+    A stamp is a short line of small digits in a corner: orange-red pixels in the top or bottom
+    quarter, grouped along the line, each group low, not too wide and lying wholly in the left or
+    right 40 %. Taking every orange pixel in the outer bands instead protected a Navy portrait's
+    gold cap insignia, ribbon bar, buttons and glasses (28,596 pixels) from dust removal."""
     r, g, b = [img[..., i].astype(np.int16) for i in range(3)]
     m = ((r > 170) & (r - b > 110) & (g > 50) & (g < r - 30) & (b < 140)).astype(np.uint8)
     h, w = m.shape
-    # keep only stamp-like clusters in the outer bands where the camera prints it
-    band = np.zeros_like(m)
-    band[int(h * 0.70):, :] = 1
-    band[:int(h * 0.30), :] = 1
-    band[:, :int(w * 0.25)] = 1
-    band[:, int(w * 0.75):] = 1
-    m &= band
+    m[int(h * 0.25):int(h * 0.75)] = 0
+    if not m.any():
+        return m > 0
+    gap = max(3, int(min(h, w) * 0.02))   # join the digits of one line, not separate objects
+    n, lab, st, _ = cv2.connectedComponentsWithStats(
+        cv2.dilate(m, np.ones((max(1, gap // 3), gap), np.uint8)), connectivity=8)
+    keep = np.zeros(n, bool)
+    for i in range(1, n):
+        x, y, bw, bh, _ = st[i]
+        in_corner = x + bw <= 0.40 * w or x >= 0.60 * w
+        keep[i] = in_corner and bh <= 0.08 * h and bw <= 0.45 * w
+    m &= keep[lab].astype(np.uint8)
     k = max(3, int(min(h, w) * 0.012))
     return cv2.dilate(m, np.ones((k, k), np.uint8)) > 0
 
