@@ -196,7 +196,9 @@ class Portrait(unittest.TestCase):
             self.assertGreaterEqual(hit, int(np.ceil(least * n)), kind)
         spots = np.any([m for _, m in defects], axis=0)
         self.assertLess(np.abs(out[spots].astype(int) - self.img[spots]).mean(), 15)
-        self.assertTrue(rec['generative_processing'])
+        filled = rec['filled_in_by_model']
+        self.assertIn('MI-GAN', filled['model'])
+        self.assertTrue(0 < filled['share'] < 0.02)   # only the damaged spots: the rest is the scan
 
     @unittest.skipUnless(have_models(), 'needs the scratch models (openfilmkit models --fetch)')
     def test_faint_specks_on_skin_are_found(self):

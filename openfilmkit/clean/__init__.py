@@ -4,7 +4,8 @@ Order follows the archive pipeline this came from (clean_batch.py): protect the 
 faces, remove dust from the original, optionally fix color, then crop; then, if asked, the
 scratch pass (see scratches.py) on the cropped copy. Manual adjustments and red eye come after.
 Dust is filled only from its immediate surroundings (OpenCV inpainting). The scratch pass is the
-one step that makes up picture (a generative fill), so it is opt-in and recorded as such.
+one step where a model draws the picture that goes into the damaged spots, so it is opt-in, and
+the recipe says which model filled how many pixels, and what share of the picture that is.
 
 16-bit TIFFs (from `convert --tiff`) are cleaned at full depth: every decision (dust, faces, the
 stamp, the crop, color statistics, scratches, red eye) is made on an 8-bit copy, exactly as for
@@ -188,6 +189,7 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         l, t, r, b = restore.find_crop(view(img))
         cleaned = np.ascontiguousarray(cleaned[t:b, l:r])
         steps.append({'step': 'crop', 'box': [l, t, r, b], 'changed': [l, t, r, b] != [0, 0, w, h]})
+    model_fill = None
     if scratches:
         try:
             nets = scratch_pass.load_nets(say)
@@ -203,8 +205,12 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         else:   # every change is inside the filled mask
             cleaned = cleaned.copy()
             cleaned[filled > 0] = repaired[filled > 0].astype(np.uint16) * 257
+        n = int(stats.get('pixels_filled', 0))
+        model_fill = {'model': 'MI-GAN (Picsart AI Research), an inpainting model',
+                      'where': 'scratches, fibers and debris found by the scratch-detection model',
+                      'pixels': n, 'share': round(n / (small.shape[0] * small.shape[1]), 6)}
         steps.append({'step': 'scratches', **stats, 'faces': len(on), 'spare_long_lines': spare_long_lines,
-                      'method': 'scratch-detection UNet, then MI-GAN generative fill (OpenCV DNN)',
+                      'method': 'found by a scratch-detection model (UNet), filled in by MI-GAN (OpenCV DNN)',
                       'models': {k: {'file': m['file'], 'sha256': m['sha256'], 'source': m['source']}
                                  for k, m in models.MODELS.items()}})
     if straighten:
@@ -232,7 +238,7 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         raise CleanError('source changed during cleaning')
     source_recipe = Path(str(source) + '.json')
     record = {
-        'openfilmkit': {'version': __version__, 'record_format': 1},
+        'openfilmkit': {'version': __version__, 'record_format': 2},
         'created_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'status': 'Cleaned copy — requires visual review',
         'source': str(source), 'source_sha256': digest,
@@ -245,7 +251,8 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         'bits_per_channel': {'source': 16 if img.dtype == np.uint16 else 8,
                              'output': 16 if cleaned.dtype == np.uint16 and dest.suffix.lower() in ('.tif', '.tiff') else 8},
         'libraries': {'opencv': cv2.__version__, 'numpy': np.__version__},
-        'generative_processing': bool(scratches), 'approved': False,
+        # Only the damaged spots a model filled in, if any; everything else is the scan.
+        'filled_in_by_model': model_fill, 'approved': False,
     }
     recipe_path.write_text(json.dumps(record, indent=2) + '\n')
     return record

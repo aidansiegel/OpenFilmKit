@@ -59,7 +59,7 @@ class Clean(unittest.TestCase):
         recipe = json.loads(Path(rec['output'] + '.json').read_text())
         self.assertEqual(recipe['source_sha256'], clean.sha(src))
         self.assertEqual(recipe['output_sha256'], clean.sha(rec['output']))
-        self.assertFalse(recipe['generative_processing'])
+        self.assertIsNone(recipe['filled_in_by_model'])   # no model drew anything into this copy
         self.assertEqual(Path(rec['output']).name, 'frame-v1-clean-v1.jpg')
 
     def test_date_stamp_is_protected(self):

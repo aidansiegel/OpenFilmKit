@@ -46,7 +46,7 @@ recipe beside it that says exactly how it was made.
   - `--color` also corrects levels and color cast; `--straighten DEGREES`, `--lift-shadows GAMMA`
     and `--red-eye` do what they say.
   - `--scratches` also finds scratches and larger debris with a trained model and fills them with
-    a generative model (see below).
+    a second model (see below).
   - On a roll folder, it cleans only conversions without a copy made with the same options.
 
 ### Files you get
@@ -67,11 +67,13 @@ primaries, so a wider color space would hold no extra color.
 
 `clean --scratches` adds a second pass for what dust removal leaves: scratches, fibers and debris.
 Microsoft's scratch-detection model from "Bringing Old Photos Back to Life" finds them, and
-MI-GAN, a generative inpainting model, fills them. Faces get a lower threshold and extra speck
-finders, catchlights and the camera's date stamp are protected, and dark marks are left as scene.
-Because the fill makes up picture where the damage was, it is off by default and a cleaned copy
-made with it is recorded as generative processing. `--spare-long-lines` keeps long straight lines
-(tile grout, wires) the model can mistake for scratches.
+MI-GAN, an inpainting model, fills them in from what surrounds them. Faces get a lower threshold
+and extra speck finders, catchlights and the camera's date stamp are protected, and dark marks are
+left as scene. Only the damaged spots are filled, typically about 1 % of a scan; the rest of the
+photo is untouched. Because a model draws what goes into those spots, the pass is off by default,
+and the recipe says which model filled how many pixels and what share of the picture that is.
+`--spare-long-lines` keeps long straight lines (tile grout, wires) the model can mistake for
+scratches.
 
 The two models (about 100 MB) are downloaded once, on first use, from this project's
 [models-1 release](https://github.com/aidansiegel/OpenFilmKit/releases/tag/models-1) and checked
@@ -110,7 +112,7 @@ descriptors, so settings meant for one hardware revision are never used on anoth
 - Scratch detection: Microsoft, [Bringing Old Photos Back to Life](https://github.com/microsoft/Bringing-Old-Photos-Back-to-Life)
   (Wan et al., CVPR 2020), MIT license; the official checkpoint converted to ONNX.
 - Scratch fill: Picsart AI Research, [MI-GAN](https://github.com/Picsart-AI-Research/MI-GAN)
-  (Sargsyan et al., ICCV 2023), MIT license (code and weights); the generator from the authors'
+  (Sargsyan et al., ICCV 2023), MIT license (code and weights); the network from the authors'
   ONNX pipeline. `tools/build_models.py` rebuilds both model files from the authors' originals.
 - Face detection: YuNet (Shiqi Yu and others), `face_detection_yunet_2023mar.onnx` from the
   [OpenCV Zoo](https://github.com/opencv/opencv_zoo), MIT license

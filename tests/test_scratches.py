@@ -136,7 +136,7 @@ class Fill(unittest.TestCase):
             self.assertEqual(crop.shape[:2], keep.shape)
             return np.zeros_like(crop)
 
-        res, calls = sc.generative_fill(img, mask, run)
+        res, calls = sc.fill_damage(img, mask, run)
         self.assertTrue((res[mask > 0] == 0).all() and (res[mask == 0] == img[mask == 0]).all())
         self.assertTrue(4 <= calls <= 20)
 
@@ -144,9 +144,9 @@ class Fill(unittest.TestCase):
         img = skin(400, 400)
         mask = np.zeros((400, 400), np.uint8)
         mask[180:220, 180:220] = 1
-        generative = img.copy()
-        generative[195:201, 195:201] = 20      # a dark dot the model made up
-        res, stats = sc.settle_fill(generative, img.copy(), mask, grow=1)
+        modeled = img.copy()
+        modeled[195:201, 195:201] = 20         # a dark dot the model made up
+        res, stats = sc.settle_fill(modeled, img.copy(), mask, grow=1)
         self.assertEqual(stats['invented_replaced'], 1)
         self.assertLess(abs(int(res[198, 198].mean()) - int(img[198, 198].mean())), 10)
 

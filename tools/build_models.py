@@ -13,7 +13,7 @@ Maintainers only: needs torch, onnx and onnxruntime, which OpenFilmKit itself do
 
 Writes OUTDIR/scratch_detection_512_fp16.onnx (the UNet for one 512 px grayscale tile, sigmoid
 included, weights stored as float16 and cast back to float32 on load) and
-OUTDIR/migan_generator_512.onnx (the generator cut out of the authors' pipeline between its input
+OUTDIR/migan_generator_512.onnx (the network cut out of the authors' pipeline between its input
 concatenation and its RGB output, fixed at 1x4x512x512, constants folded so OpenCV can run it),
 then checks both in OpenCV against the originals.
 """

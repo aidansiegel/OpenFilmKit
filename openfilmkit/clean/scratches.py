@@ -16,12 +16,12 @@ PyTorch and onnxruntime, and faces come from YuNet (see clean.find_faces) instea
    - a thick detection darker than its surroundings is scene (a shadow, a trench), not damage:
      dust and emulsion scratches on a negative print bright;
    - the scan's own edge and the camera date stamp are never touched.
-3. The fill (generative_fill): MI-GAN, window by window around each piece of damage, with every
+3. The fill (fill_damage): MI-GAN, window by window around each piece of damage, with every
    unfilled damaged pixel in the window a hole at once. Small spots the fill invents are evened
    out against a conservative (Telea) fill, and too-smooth fills get grain from nearby film.
 
-This fill makes up picture where the damage was, so a cleaned copy made with it is recorded as
-generative processing.
+Here the model draws the picture that goes where the damage was, so clean records which model filled
+how many pixels, and what share of the picture that is.
 """
 import cv2
 import numpy as np
@@ -64,7 +64,7 @@ def scratch_probability(net, img):
 
 
 def fill_window(net):
-    """run(crop, keep) for generative_fill: MI-GAN on one window, as the authors' ONNX pipeline does
+    """run(crop, keep) for fill_damage: MI-GAN on one window, as the authors' ONNX pipeline does
     it for a window of 512 px or less (resize to 512, generate, resize back, then blend through
     the keep mask widened by a 3 px max filter and softened by a 5 px Gaussian)."""
     kernel = cv2.getGaussianKernel(5, 1.0)
@@ -371,7 +371,7 @@ def build_mask(img, prob, protect, faces, dust_mask=None, thr=0.4, face_thr=0.15
 
 # ---------------------------------------------------------------- fill
 
-def generative_fill(img, mask, run, tile=TILE, margin=MARGIN, max_passes=64):
+def fill_damage(img, mask, run, tile=TILE, margin=MARGIN, max_passes=64):
     """Fill `mask` window by window around each piece of damage, largest first. `run(crop, keep)`
     returns the model's fill of `crop` (uint8 HxWx3) where `keep` (uint8 HxW) is 0. Every unfilled
     damaged pixel in a window is a hole at once, so a half-filled fleck is never context to copy.
@@ -411,7 +411,7 @@ def generative_fill(img, mask, run, tile=TILE, margin=MARGIN, max_passes=64):
 
 
 def settle_fill(res, conservative, mask, grow):
-    """Undo small spots a generative fill invented: where it departs sharply from the conservative
+    """Undo small spots the model's fill made up: where it departs sharply from the conservative
     (Telea) fill, the conservative fill wins; where a filled spot is still clearly darker or brighter
     than its neighborhood, it takes the neighborhood median. Returns (result, stats)."""
     filled = mask > 0
@@ -495,7 +495,7 @@ def repair(img, faces, protect, dust_mask, nets, spare_long_lines=False):
     if not mask.any():
         return img.copy(), dict(stats, model_calls=0, invented_replaced=0, spots_evened=0, grain_matched=0), mask
     telea = cv2.inpaint(img, mask * 255, 3, cv2.INPAINT_TELEA)
-    res, calls = generative_fill(img, mask, fill_window(fill_net))
+    res, calls = fill_damage(img, mask, fill_window(fill_net))
     res, settle = settle_fill(res, telea, mask, grow_for(img.shape))
     res, grained = match_grain(res, mask)
     return res, dict(stats, **settle, grain_matched=grained, model_calls=calls, pixels_filled=int(mask.sum())), mask

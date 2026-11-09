@@ -6,7 +6,7 @@ OpenFilmKit GitHub release named in MODELS and are saved under OPENFILMKIT_MODEL
 
 - scratch: Microsoft's scratch-detection UNet from "Bringing Old Photos Back to Life" (MIT), the
   official checkpoint converted to ONNX at a 512 px tile with half-precision weights.
-- fill: the MI-GAN generator (Picsart AI Research, MIT), taken unchanged out of the authors'
+- fill: the MI-GAN network (Picsart AI Research, MIT), taken unchanged out of the authors'
   migan_pipeline_v2.onnx and fixed at 512 x 512.
 tools/build_models.py rebuilds both from the authors' files.
 """

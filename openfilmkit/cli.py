@@ -411,7 +411,7 @@ def parser():
     s.add_argument('--lift-shadows', type=float, metavar='GAMMA', help='brighten shadows, e.g. 0.85')
     s.add_argument('--red-eye', action='store_true', help='darken flash-red pupils')
     s.add_argument('--scratches', action='store_true',
-                   help='also find scratches and debris with a trained model and fill them with a generative '
+                   help='also find scratches and debris with a trained model and fill them in with another (MI-GAN) '
                         'model (MI-GAN); downloads about 100 MB of models on first use')
     s.add_argument('--spare-long-lines', action='store_true',
                    help='with --scratches: leave long straight lines outside faces (tile grout, wires), '
