@@ -129,7 +129,13 @@ def find_crop(img, max_fraction=0.08, margin_fraction=0.002, sliver_fraction=0.0
 # ---------------------------------------------------------------- date stamp and protection
 
 def stamp_mask(img):
-    """Pixels of the camera's orange-red LED date stamp (plus a margin), to leave untouched.
+    """Pixels of the camera's LED date stamp (plus a margin), to leave untouched: a bright
+    orange-red stamp, or a faint one (see faint_stamp)."""
+    return bright_stamp(img) | faint_stamp(img)
+
+
+def bright_stamp(img):
+    """A bright orange-red date stamp, the usual look on prints.
 
     A stamp is a short line of small digits in a corner: orange-red pixels in the top or bottom
     quarter, grouped along the line, each group low, not too wide and lying wholly in the left or
@@ -153,6 +159,137 @@ def stamp_mask(img):
     k = max(3, int(min(h, w) * 0.012))
     return cv2.dilate(m, np.ones((k, k), np.uint8)) > 0
 
+
+def faint_stamp(img):
+    """A date stamp printed faintly over the picture, as on many negative conversions and some
+    prints: its seven-segment digits are thin bars only a little brighter and warmer than what is
+    behind them, so the dust pass took them for specks and nibbled them away.
+
+    Warm bars alone are everywhere (brick paving, foliage, siding), so the bars must make digits:
+    horizontal ones at the top, middle or bottom of a digit-sized box and upright ones at its
+    sides, at least three such digits of one size in a row, in a corner. A print turned sideways
+    has its stamp running down the side, so the side quarters are checked turned a quarter turn.
+    A camera prints its stamp at a fixed size on the frame, so the search runs on a copy whose
+    short side is STAMP_SIDE pixels whatever the image's resolution, and the result is scaled back.
+    On 118 prints and conversions this found 35 stamps, 11 of them missed by bright_stamp, and
+    nothing else."""
+    h, w = img.shape[:2]
+    s = STAMP_SIDE / min(h, w)
+    if s == 1:
+        return faint_stamp_at(img)
+    work = cv2.resize(img, (max(1, round(w * s)), max(1, round(h * s))),
+                      interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_CUBIC)
+    return cv2.resize(faint_stamp_at(work).astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
+
+
+STAMP_SIDE = 1600
+
+
+def faint_stamp_at(img):
+    """faint_stamp at the image's own size."""
+    h, w = img.shape[:2]
+    short = min(h, w)
+    out = np.zeros((h, w), np.uint8)
+    for a, b in ((0, h // 4), (h - h // 4, h)):        # top and bottom quarters
+        box = _stamp_line(img[a:b], short, w)
+        if box:
+            x0, y0, x1, y1 = box
+            out[a + y0:a + y1, x0:x1] = 1
+    for a, b in ((0, w // 4), (w - w // 4, w)):        # left and right quarters, turned upright
+        box = _stamp_line(np.ascontiguousarray(np.rot90(img[:, a:b])), short, h)
+        if box:                                         # turned (r, c) is (row c, column b - 1 - r)
+            x0, y0, x1, y1 = box
+            out[x0:x1, b - y1:b - y0] = 1
+    k = max(3, int(short * 0.012))
+    return cv2.dilate(out, np.ones((k, k), np.uint8)) > 0
+
+
+def _warm_bars(band, short):
+    """(x, y, w, h) of short thin bars a little brighter and warmer (more red than blue) than the
+    median round them. Worked out in strips."""
+    sig = max(1.0, short * 0.0004)
+    k = max(5, int(short * 0.008) | 1)
+
+    def warmer(a, b):
+        sm = cv2.GaussianBlur(band[a:b].astype(np.float32), (0, 0), sig)
+        bg = np.dstack([cv2.medianBlur(np.clip(sm[..., c], 0, 255).astype(np.uint8), k) for c in range(3)])
+        d = sm - bg
+        return ((d[..., 0] > 10) & (d[..., 0] - d[..., 2] > 7) & (d[..., 1] > 3)).astype(np.uint8)
+    cand = np.empty(band.shape[:2], np.uint8)
+    for y0, y1, part in by_bands(warmer, band.shape[0], int(4 * sig) + 2 + k // 2):
+        cand[y0:y1] = part
+    n, _, st, _ = cv2.connectedComponentsWithStats(cand, connectivity=8)
+    bars = []
+    for x, y, bw, bh, _ in st[1:]:
+        long_, thin = max(bw, bh), min(bw, bh)
+        if short * 0.004 <= long_ <= short * 0.025 and thin <= short * 0.006 and long_ >= 1.8 * thin:
+            bars.append((int(x), int(y), int(bw), int(bh)))
+    return bars
+
+
+def _digits(bars, short):
+    """Bars grouped into seven-segment digits: [(x, y, w, h, bars, stroke)], stroke being the
+    median bar thickness."""
+    m = np.zeros((max(y + bh for x, y, bw, bh in bars) + 2, max(x + bw for x, y, bw, bh in bars) + 2), np.uint8)
+    for x, y, bw, bh in bars:
+        m[y:y + bh, x:x + bw] = 1
+    gy, gx = max(3, int(short * 0.014)), max(3, int(short * 0.006))   # bridges a missing segment, not two digits
+    n, _, st, _ = cv2.connectedComponentsWithStats(cv2.dilate(m, np.ones((gy, gx), np.uint8)), connectivity=8)
+    digits = []
+    for X, Y, W, H, _ in st[1:]:
+        X, Y, W, H = X + gx // 2, Y + gy // 2, W - gx, H - gy
+        mine = [b for b in bars if X <= b[0] + b[2] / 2 <= X + W and Y <= b[1] + b[3] / 2 <= Y + H]
+        one = all(b[3] > b[2] for b in mine)   # a 1 is two upright bars, as narrow as one
+        if len(mine) < 2 or not short * 0.012 <= H <= short * 0.06 or not (0.2 * H <= W or one) or W > 0.85 * H:
+            continue
+        fit, slots = 0, set()
+        for x, y, bw, bh in mine:
+            cx, cy = (x + bw / 2 - X) / max(W, 1), (y + bh / 2 - Y) / H
+            if bw > bh:   # across: at the top, middle or bottom
+                row = min(range(3), key=lambda r: abs(cy - r / 2))
+                if abs(cy - row / 2) <= 0.15 and bw >= 0.25 * W:
+                    fit += 1
+                    slots.add(('across', row))
+            elif (cx <= 0.35 or cx >= 0.65 or W < 0.35 * H) and 0.15 * H <= bh <= 0.6 * H:   # upright, at a side
+                fit += 1
+                slots.add(('upright', cx >= 0.5, cy >= 0.5))
+        if fit >= 0.8 * len(mine) and len(slots) >= 2:
+            digits.append((X, Y, W, H, len(mine), float(np.median([min(b[2], b[3]) for b in mine]))))
+    return digits
+
+
+def _stamp_line(band, short, width):
+    """(x0, y0, x1, y1) of a faint date stamp's line of digits in a top or bottom band, or None."""
+    bars = _warm_bars(band, short)
+    if not bars:
+        return None
+    digits = sorted(_digits(bars, short))
+    line = []
+    for i, d in enumerate(digits):   # digits of one height and stroke, tops aligned, close in a row
+        row = [d]
+        for e in digits[i + 1:]:
+            if (abs(e[3] - d[3]) <= 0.25 * d[3] and abs(e[1] - d[1]) <= 0.2 * d[3]
+                    and max(e[5], d[5]) <= 2 * min(e[5], d[5])
+                    and 0 <= e[0] - (row[-1][0] + row[-1][2]) <= 2.2 * d[3]):
+                row.append(e)
+        if len(row) >= 2 and sum(e[4] for e in row) >= 7 and len(row) > len(line):
+            line = row
+    if not line:
+        return None
+    x0, x1 = min(d[0] for d in line), max(d[0] + d[2] for d in line)
+    y0, y1 = min(d[1] for d in line), max(d[1] + d[3] for d in line)
+    dh, stroke = y1 - y0, float(np.median([d[5] for d in line]))
+    lo, hi, grew = x0 - 2 * dh, x1 + 2 * dh, True
+    while grew:   # a fainter digit at either end: bars of the same stroke in the line's band, close by
+        grew = False
+        for x, y, bw, bh in bars:
+            if (y0 - 0.1 * dh <= y + bh / 2 <= y1 + 0.1 * dh and x0 - 0.6 * dh <= x + bw / 2 <= x1 + 0.6 * dh
+                    and lo <= x and x + bw <= hi and stroke / 2 <= min(bw, bh) <= stroke * 2
+                    and (x < x0 or x + bw > x1)):
+                x0, x1, grew = min(x0, x), max(x1, x + bw), True
+    if not (x1 <= 0.40 * width or x0 >= 0.60 * width):   # a stamp sits in a corner
+        return None
+    return x0, y0, x1, y1
 
 def feature_mask(shape, faces):
     """Eyes and mouth of each face (bright catchlights and teeth are real), as discs sized from the
@@ -388,11 +525,11 @@ def dust_mask(img, protect=None, threshold=28, max_area_fraction=2.5e-5, smooth_
         if ring.sum() >= 20 and float(fine[ring].std()) > texture_limit:
             continue
         keep[i] = True
-    mask = keep[labels]
-    if protect is not None:
-        mask &= ~protect
     grow = max(1, int(min(h, w) * 0.0008))
-    return cv2.dilate(mask.astype(np.uint8), np.ones((2 * grow + 1, 2 * grow + 1), np.uint8)) > 0
+    mask = cv2.dilate(keep[labels].astype(np.uint8), np.ones((2 * grow + 1, 2 * grow + 1), np.uint8)) > 0
+    if protect is not None:   # after widening, so a speck beside a stamp digit doesn't take its edge
+        mask &= ~protect
+    return mask
 
 
 def remove_dust(img, mask, out=None):

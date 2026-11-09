@@ -182,6 +182,38 @@ class Clean(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (r / 'derived').glob('*-clean-v1.jpg')),
                          ['frame-01-v1-clean-v1.jpg', 'frame-02-v1-clean-v1.jpg'])
 
+    def test_a_spot_pointed_at_in_the_cleaned_copy_is_filled(self):
+        img = scene()
+        img[:, :30] = 255                                         # holder light: the crop moves the picture
+        first = clean.clean(self.write(img), protect_faces=False)
+        l, t = first['steps'][-1]['box'][:2]
+        img[400:410, 500:510] = 20                                # a dark blot the dust pass leaves alone
+        src = self.write(img, 'frame-v2.jpg')
+        plain = np.asarray(Image.open(clean.clean(src, self.root / 'plain.png', protect_faces=False)['output'])).astype(int)
+        x, y = 505 - l, 405 - t                                   # where it is in the cleaned copy
+        self.assertLess(plain[y, x].max(), 60)
+        rec = clean.clean(src, self.root / 'spotted.png', protect_faces=False, spots=[(x, y, 9)])
+        out = np.asarray(Image.open(rec['output'])).astype(int)
+        self.assertGreater(out[y, x].min(), 80)
+        far = np.ones(out.shape[:2], bool)
+        far[y - 12:y + 13, x - 12:x + 13] = False
+        self.assertTrue((out[far] == plain[far]).all())          # nothing else moved
+        step = rec['steps'][-1]
+        self.assertEqual((step['step'], step['spots']), ('spots', [[x, y, 9]]))
+        self.assertGreater(step['pixels_filled'], 200)
+
+    def test_spots_must_be_inside_the_copy_and_for_one_photo(self):
+        src = self.write(scene())
+        with self.assertRaisesRegex(clean.CleanError, 'inside'):
+            clean.clean(src, protect_faces=False, crop=False, spots=[(5000, 10)])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), self.assertRaises(SystemExit):
+            cli.main(['clean', str(src), '--spot', '10'])
+        r = self.root / 'roll-03'
+        roll.create(r)
+        with contextlib.redirect_stderr(err):
+            self.assertNotEqual(cli.main(['clean', str(r), '--spot', '10,10']), 0)
+
 
 
 def scene16(w=900, h=600, seed=3):

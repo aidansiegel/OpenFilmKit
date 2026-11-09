@@ -149,9 +149,11 @@ def default_output(source):
 
 def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=False,
           straighten=None, lift_shadows=None, red_eye=False, scratches=False, spare_long_lines=False,
-          say=None):
+          spots=None, say=None):
     """Clean `source` into a new file with a recipe beside it (<output>.json). Returns the recipe.
-    `say` reports model downloads (scratches only)."""
+    `spots`: [(x, y) or (x, y, radius)] to fill by hand, in pixels of the finished copy (so they
+    can be read off a copy cleaned earlier with the same options); the radius defaults to 0.4 % of
+    the short side. `say` reports model downloads (scratches only)."""
     source = Path(source).expanduser().resolve()
     dest = Path(output).expanduser().resolve() if output else default_output(source)
     recipe_path = Path(str(dest) + '.json')
@@ -164,6 +166,9 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         raise CleanError('straighten must be between -15 and 15 degrees')
     if lift_shadows is not None and not 0.3 <= lift_shadows <= 1:
         raise CleanError('lift-shadows gamma must be between 0.3 and 1')
+    spots = [tuple(int(v) for v in s) for s in spots or []]
+    if any(len(s) not in (2, 3) or (len(s) == 3 and s[2] < 1) for s in spots):
+        raise CleanError('a spot is X,Y or X,Y,R, with a radius of at least 1 pixel')
     digest = sha(source)
     img = load(source)
     view = restore.to8   # decisions on 8 bits; for an 8-bit image this is the image itself
@@ -238,6 +243,18 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
             cleaned[changed] = corrected[changed].astype(np.uint16) * 257
         steps.append({'step': 'red_eye', 'faces_with_eyes': len(found),
                       'eyes_corrected': [list(e) for e in fixed]})
+    if spots:
+        oh, ow = cleaned.shape[:2]
+        spots = [s if len(s) == 3 else (*s, max(2, round(min(oh, ow) * 0.004))) for s in spots]
+        if any(not (0 <= x < ow and 0 <= y < oh) or r > min(oh, ow) // 10 for x, y, r in spots):
+            raise CleanError(f'spots must lie inside the {ow}x{oh} cleaned copy, with a radius up to '
+                             f'{min(oh, ow) // 10} pixels')
+        holes = np.zeros((oh, ow), np.uint8)
+        for x, y, r in spots:
+            cv2.circle(holes, (x, y), r, 1, -1)
+        cleaned = restore.remove_dust(cleaned, holes > 0, out=cleaned)
+        steps.append({'step': 'spots', 'spots': [list(s) for s in spots], 'pixels_filled': int(holes.sum()),
+                      'method': 'OpenCV inpaint (Telea), at spots chosen by hand'})
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     save(cleaned, dest)

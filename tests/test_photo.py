@@ -114,6 +114,39 @@ def elsewhere(defects, filled):
     return int((filled & ~(cv2.dilate(near.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0)).sum())
 
 
+SEGMENTS = {'0': 'abcdef', '1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc', '5': 'afgcd',
+            '6': 'afgedc', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg'}
+
+
+def led_stamp(img, text, lift=(32, 26, 9)):
+    """A camera's LED date stamp printed faintly, as on many negative conversions: seven-segment
+    digits in the bottom right corner, 3 % of the short side high, at a real stamp's spacing, each
+    lifting the picture by `lift` (measured on a faint stamp on a real scan). Returns (stamped
+    uint8, bool mask of the digits)."""
+    h, w = img.shape[:2]
+    height = round(min(h, w) * 0.03)
+    dw, t = height * 0.55, max(2, round(height * 0.1))
+    step = dw + 0.45 * height
+    m = np.zeros((h, w), np.float32)
+    bottom, x = h * 0.93, w * 0.93 - len(text) * step
+    top, mid = bottom - height, bottom - height / 2
+    for ch in text:
+        if ch != ' ':
+            l, r = x, x + dw
+            segs = {'a': (l, top, r, top), 'g': (l, mid, r, mid), 'd': (l, bottom, r, bottom),
+                    'f': (l, top, l, mid), 'b': (r, top, r, mid), 'e': (l, mid, l, bottom), 'c': (r, mid, r, bottom)}
+            for seg in SEGMENTS[ch]:
+                x0, y0, x1, y1 = segs[seg]
+                gap = t * 1.2   # LED segments don't touch at the corners
+                if y0 == y1:
+                    x0, x1, y0, y1 = x0 + gap, x1 - gap, y0 - t / 2, y1 + t / 2
+                else:
+                    x0, x1, y0, y1 = x0 - t / 2, x1 + t / 2, y0 + gap, y1 - gap
+                m[round(y0):round(y1), round(x0):round(x1)] = 1
+        x += step
+    soft = cv2.GaussianBlur(m, (0, 0), t / 3)
+    return np.clip(img + soft[..., None] * np.array(lift, np.float32), 0, 255).astype(np.uint8), m > 0
+
 @unittest.skipIf(clean is None, 'needs OpenCV, numpy and Pillow')
 class Portrait(unittest.TestCase):
     @classmethod
@@ -349,6 +382,41 @@ class HopperPortrait(unittest.TestCase):
         changed = np.abs(self.cleaned().astype(int) - self.damaged).max(axis=2) > 0
         busy = self.clear_pieces(plain=False)
         self.assertGreaterEqual(sum(changed[m].mean() >= 0.5 for m in busy), len(busy) - 1)
+
+
+
+@unittest.skipIf(clean is None, 'needs OpenCV, numpy and Pillow')
+class FaintStamp(unittest.TestCase):
+    """A date stamp printed faintly is found and kept, upright or on a print turned sideways."""
+    @classmethod
+    def setUpClass(cls):
+        cls.ride = np.asarray(Image.open(RIDE).convert('RGB'))
+        cls.hopper = np.asarray(Image.open(HOPPER).convert('RGB'))
+
+    def test_neither_portrait_has_one(self):
+        self.assertEqual(int(restore.faint_stamp(self.ride).sum()), 0)
+        self.assertEqual(int(restore.faint_stamp(self.hopper).sum()), 0)
+
+    def test_a_faint_stamp_is_found(self):
+        for img, text in ((self.ride, '2 5 88'), (self.ride, '7 23 99'), (self.hopper, '7 23 99')):
+            stamped, digits = led_stamp(img, text)
+            self.assertGreater(restore.stamp_mask(stamped)[digits].mean(), 0.95, text)
+
+    def test_a_stamp_running_down_the_side_is_found(self):
+        stamped, digits = led_stamp(np.ascontiguousarray(np.rot90(self.ride)), '7 23 99')
+        found = restore.stamp_mask(np.ascontiguousarray(np.rot90(stamped, -1)))
+        self.assertGreater(found[np.rot90(digits, -1)].mean(), 0.95)
+
+    def test_clean_leaves_its_digits_alone(self):
+        # The dust pass took a faint stamp's segments for specks and nibbled them away (here, 10
+        # of its pixels).
+        stamped, digits = led_stamp(self.hopper, '7 23 99')
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / 'stamped.png'
+            Image.fromarray(stamped).save(src)
+            out = np.asarray(Image.open(clean.clean(src, crop=False)['output']).convert('RGB'))
+        near = cv2.dilate(digits.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+        self.assertTrue((out[near] == stamped[near]).all())
 
 
 if __name__ == '__main__':

@@ -247,6 +247,8 @@ def cmd_clean(args, out):
             sources.append(path)
     if args.output and len(sources) != 1:
         raise Fail('--output needs exactly one source')
+    if args.spot and (len(sources) != 1 or Path(args.sources[0]).expanduser().is_dir()):
+        raise Fail('--spot is for one photo at a time')
     if not sources:
         out.say('Nothing to clean: no conversions without a copy cleaned with these settings.')
     records = []
@@ -256,7 +258,7 @@ def cmd_clean(args, out):
                                  protect_faces=args.faces, color=args.color,
                                  straighten=args.straighten, lift_shadows=args.lift_shadows,
                                  red_eye=args.red_eye, scratches=args.scratches,
-                                 spare_long_lines=args.spare_long_lines, say=out.error)
+                                 spare_long_lines=args.spare_long_lines, spots=args.spot, say=out.error)
         except clean.CleanError as e:
             out.error(f'openfilmkit: {source}: {e}')
             records.append({'source': str(source), 'error': str(e)})
@@ -268,6 +270,17 @@ def cmd_clean(args, out):
         records.append(record)
     out.result(records)
     return 0 if all('error' not in r for r in records) else 1
+
+
+def spot(text):
+    """X,Y or X,Y,R (whole pixels) for clean --spot."""
+    try:
+        values = [int(v) for v in text.split(',')]
+    except ValueError:
+        values = []
+    if len(values) not in (2, 3) or min(values) < 0:
+        raise argparse.ArgumentTypeError(f'expected X,Y or X,Y,R in pixels, not {text!r}')
+    return tuple(values)
 
 
 def film_info(args, roll_dir):
@@ -411,11 +424,14 @@ def parser():
     s.add_argument('--lift-shadows', type=float, metavar='GAMMA', help='brighten shadows, e.g. 0.85')
     s.add_argument('--red-eye', action='store_true', help='darken flash-red pupils')
     s.add_argument('--scratches', action='store_true',
-                   help='also find scratches and debris with a trained model and fill them in with another (MI-GAN) '
+                   help='also find scratches and debris with a trained model and fill them in with another '
                         'model (MI-GAN); downloads about 100 MB of models on first use')
     s.add_argument('--spare-long-lines', action='store_true',
                    help='with --scratches: leave long straight lines outside faces (tile grout, wires), '
                         'which the model can take for scratches')
+    s.add_argument('--spot', type=spot, action='append', metavar='X,Y[,R]',
+                   help='also fill a spot you point at: X,Y in pixels of a copy cleaned with the same options, '
+                        'radius R (default 0.4%% of the short side); repeat for more spots')
 
     s = sub.add_parser('scan', parents=[common], help='capture linear 48-bit TIFF masters')
     s.add_argument('target', help='a roll folder (next frame) or an explicit .tif path')

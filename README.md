@@ -39,14 +39,18 @@ recipe beside it that says exactly how it was made.
   (142 profiles digitized from manufacturers' data sheets). `--tiff` writes a 16-bit TIFF at full
   resolution instead of a JPEG (see below).
 - `clean` removes dust and fibers and trims film-holder edges, always on a new copy. Eyes and
-  mouths, and the camera's date stamp, are left untouched by dust removal; faces are found in any
-  orientation, so sideways frames are covered. Options:
+  mouths, and the camera's date stamp (bright or printed faintly, upright or down the side), are
+  left untouched by dust removal; faces are found in any orientation, so sideways frames are
+  covered. Options:
   - `--no-dust` trims holder edges only; run `clean` again later for dust.
   - `--no-crop` keeps the holder edges; `--no-faces` skips face detection.
   - `--color` also corrects levels and color cast; `--straighten DEGREES`, `--lift-shadows GAMMA`
     and `--red-eye` do what they say.
   - `--scratches` also finds scratches and larger debris with a trained model and fills them with
     a second model (see below).
+  - `--spot X,Y[,R]` fills a spot that's left, from its surroundings like a dust fill: X,Y are
+    pixels in a copy cleaned with the same options (the crop comes out the same), R a radius
+    (default 0.4 % of the short side). Repeat it for more spots; the recipe lists them.
   - On a roll folder, it cleans only conversions without a copy made with the same options.
 
 ### Files you get
@@ -78,7 +82,7 @@ scratches.
 The two models (about 100 MB) are downloaded once, on first use, from this project's
 [models-1 release](https://github.com/aidansiegel/OpenFilmKit/releases/tag/models-1) and checked
 against their SHA-256; `openfilmkit models --fetch` gets them ahead of time. Both run in OpenCV.
-A 33-megapixel scan takes about two minutes and 2.5 GB of memory.
+A 73-megapixel scan, 16-bit included, takes about five minutes and at most 2.5 GB of memory.
 
 ## Scans from SilverFast or VueScan
 
