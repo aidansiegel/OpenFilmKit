@@ -249,6 +249,13 @@ def collect(package, to=None):
     return record
 
 
+def remove(package):
+    """Delete a package folder, after checking it is one."""
+    package = Path(package).expanduser().resolve()
+    read(package)
+    shutil.rmtree(package)
+
+
 def show(package):
     """A summary of a package: its ID, state and what it does."""
     package = Path(package).expanduser().resolve()

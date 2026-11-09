@@ -27,7 +27,7 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 | M6 | Packaging: Homebrew tap for macOS and Linux | Done: `brew install` tested on macOS (arm64) and Fedora (aarch64). |
 | M7 | Terminal UI (Textual) | Not started. |
 | M8 | First release | 0.1.0, an early release ahead of M4 and M7, so the kit can be installed and tried. |
-| M9 | Remote processing: run conversion and cleanup on another machine, or queue jobs for several | In progress: job packages for `clean` (`clean --pack`, `job run`, `job collect`), with stage checkpoints so a stopped job resumes to the same result. Next: convert jobs, `--on HOST`, then a queue and workers. A 73 MP frame fits in 2.5 GB. |
+| M9 | Remote processing: run conversion and cleanup on another machine, or queue jobs for several | In progress: `clean --on HOST` (over SSH, resumable), built on job packages (`clean --pack`, `job run`, `job collect`) with stage checkpoints, so a stopped job resumes to the same result. Next: convert jobs, then a shared queue and workers. A 73 MP frame fits in 2.5 GB. |
 
 ## Known limits
 

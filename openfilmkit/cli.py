@@ -254,7 +254,7 @@ def cmd_clean(args, out):
     options = dict(crop=args.crop, dust=args.dust, protect_faces=args.faces, color=args.color,
                    straighten=args.straighten, lift_shadows=args.lift_shadows, red_eye=args.red_eye,
                    scratches=args.scratches, spare_long_lines=args.spare_long_lines, spots=args.spot)
-    if args.pack:
+    if args.pack or args.on:
         return pack_clean(sources, args, options, out)
     from . import jobs
     records = []
@@ -278,17 +278,35 @@ def cmd_clean(args, out):
 
 
 def pack_clean(sources, args, options, out):
-    from . import jobs
+    """clean --pack, or --on HOST (pack, then run there)."""
+    from . import jobs, remote
+    if args.pack and args.on:
+        raise Fail('choose --pack or --on, not both')
+    into = args.pack or remote.outbox(args.on)
     packed = []
     for source in sources:
         try:
-            package = jobs.pack_clean(source, args.pack, output=args.output, **options)
+            package = jobs.pack_clean(source, into, output=args.output, **options)
         except (jobs.JobError, OSError) as e:
             out.error(f'openfilmkit: {source}: {e}')
             packed.append({'source': str(source), 'error': str(e)})
             continue
-        out.say(f'{source.name} → job {package.name[:12]} in {package.parent}')
+        if args.pack:
+            out.say(f'{source.name} → job {package.name[:12]} in {package.parent}')
         packed.append({'source': str(source), 'package': str(package), 'id': package.name})
+    if args.on and any('error' not in p for p in packed):
+        ready = [p['package'] for p in packed if 'error' not in p]
+        to = Path(args.output).expanduser().resolve().parent if args.output else None
+        try:
+            done = iter(remote.run_on(args.on, ready, to=to, keep=args.keep_remote, say=out.say))
+        except remote.RemoteError as e:
+            raise Fail(str(e))
+        packed = [p if 'error' in p else next(done) for p in packed]
+        for rec in packed:
+            if 'error' in rec:
+                out.error(f"openfilmkit: {rec.get('source') or rec.get('package')}: {rec['error']}")
+            else:
+                out.say(f"{Path(rec['source']).name} → {Path(rec['output']).name} (on {args.on})")
     out.result(packed)
     return 0 if all('error' not in p for p in packed) else 1
 
@@ -301,6 +319,11 @@ def cmd_job(args, out):
             out.say(f"{info['id'][:12]}: {info['state']} — {info['job']['command']} of {info['about']['source']}"
                     f" → {info['about']['output_name']}")
             out.result(info)
+            return 0
+        if args.job_command == 'remove':
+            for package in args.packages:
+                jobs.remove(package)
+            out.result({'removed': args.packages})
             return 0
         if args.job_command == 'collect':
             record = jobs.collect(args.package, args.to)
@@ -487,6 +510,11 @@ def parser():
     s.add_argument('--pack', metavar='DIR',
                    help="don't clean now: write a job package per photo into DIR, for `openfilmkit job run` "
                         'here or on another machine')
+    s.add_argument('--on', metavar='HOST',
+                   help='clean on another machine over SSH (same OpenFilmKit version there) and bring the '
+                        'results back; running it again resumes a stopped run')
+    s.add_argument('--keep-remote', action='store_true',
+                   help="with --on: keep the job packages afterwards (here and on the host)")
 
     j = sub.add_parser('job', help='run and collect job packages (made with clean --pack)').add_subparsers(
         dest='job_command', required=True)
@@ -498,6 +526,8 @@ def parser():
                      help="copy a finished job's result and recipe out, beside the original by default")
     s.add_argument('package')
     s.add_argument('--to', metavar='DIR', help='folder to copy into')
+    s = j.add_parser('remove', parents=[common], help='delete job packages (checked to be packages first)')
+    s.add_argument('packages', nargs='+')
 
     s = sub.add_parser('scan', parents=[common], help='capture linear 48-bit TIFF masters')
     s.add_argument('target', help='a roll folder (next frame) or an explicit .tif path')

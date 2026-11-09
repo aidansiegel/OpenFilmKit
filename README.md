@@ -95,12 +95,37 @@ The two models (about 100 MB) are downloaded once, on first use, from this proje
 against their SHA-256; `openfilmkit models --fetch` gets them ahead of time. Both run in OpenCV.
 A 73-megapixel scan, 16-bit included, takes about five minutes and at most 2.5 GB of memory.
 
-### Job packages: cleaning on another machine
+### Cleaning on another machine
 
-`clean --pack DIR` doesn't clean: it writes one job package per photo into `DIR`, a folder that
-holds the photo, the options and nothing else it depends on. Copy the packages anywhere
-OpenFilmKit is installed (a small always-on machine, say) and run them there, then bring the
-results back:
+`clean --on HOST` does the work on another machine over SSH and brings the results back, beside
+the originals as usual:
+
+```sh
+openfilmkit clean roll-07 --scratches --on pi
+```
+
+HOST is any name `ssh` knows, such as one from `~/.ssh/config`. The host needs the same OpenFilmKit
+version, `rsync`, and an SSH key so it doesn't ask for a password. If `openfilmkit` isn't on the
+path there for SSH commands (common with Homebrew on Linux), say where it is in
+`~/.config/openfilmkit/hosts.toml`:
+
+```toml
+[hosts.pi]
+openfilmkit = "/home/linuxbrew/.linuxbrew/bin/openfilmkit"
+jobs = "openfilmkit-jobs"      # where jobs go on the host, from its home folder (the default)
+```
+
+If the connection drops or the host goes to sleep, run the same command again: finished photos
+are only copied back, and a photo that was under way picks up where it stopped. `--keep-remote`
+keeps the job packages afterwards, which are otherwise deleted on both machines once each result
+is back and checked.
+
+### Job packages
+
+`--on` works with job packages, which can also be made and moved by hand. `clean --pack DIR`
+doesn't clean: it writes one job package per photo into `DIR`, a folder that holds the photo, the
+options and nothing else it depends on. Copy the packages anywhere OpenFilmKit is installed and
+run them there, then bring the results back:
 
 ```sh
 openfilmkit clean roll-07 --scratches --pack jobs/
@@ -121,8 +146,8 @@ model's probabilities, the scratch mask and every window MI-GAN has filled are s
 package as they're finished (`work/checkpoints/`), so the next `job run`, on this machine or on
 whichever machine the package goes to, goes on from there. The result is the same, byte for byte,
 as a run that never stopped. The recipe lists the stages that were picked up and the machine that
-did them, and the checkpoints are deleted once the job is done. Running jobs over SSH and a shared
-queue for several machines are next (see ROADMAP.md).
+did them, and the checkpoints are deleted once the job is done. `job remove` deletes packages. A
+shared queue that several machines take jobs from is next (see ROADMAP.md).
 
 ## Scans from SilverFast or VueScan
 
