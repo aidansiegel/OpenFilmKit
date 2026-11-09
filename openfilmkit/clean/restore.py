@@ -228,23 +228,43 @@ def lift_shadows(img, gamma=0.85, amount=1.0):
 
 # ---------------------------------------------------------------- dust
 
-def dust_mask(img, protect=None, threshold=28, max_area_fraction=2.5e-5, smooth_std=14, max_crowd=5):
+def dust_mask(img, protect=None, threshold=28, max_area_fraction=2.5e-5, smooth_std=14, max_crowd=5,
+              texture_factor=2.5, grain_floor=1.5):
     """Small bright specks and hair-thin bright lines: dust and scratches on the negative.
 
     A pixel is a candidate when it is clearly brighter than a median-filtered copy of the image;
     connected candidates are kept when small (or thin), and only where the surroundings are smooth
-    enough that a real highlight is unlikely. `protect` (bool mask) is never included."""
+    enough that a real highlight is unlikely. `protect` (bool mask) is never included.
+
+    Smooth means two things. The median-filtered copy must vary little (no edges or shading), and
+    the fine detail in a ring round the candidate must be no stronger than texture_factor times
+    the photo's own grain: a glint on a strand of hair sits in fine, structured texture that the
+    median filter hides, while dust on skin, a wall or sky sits in plain grain. On a 1984 NASA
+    portrait the first test alone took 42 hair glints for dust; on full-resolution archive scans
+    the second drops 2 of 537 detections. The limit follows the photo's grain, so a grainy scan
+    is not left uncleaned."""
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     k = max(5, int(min(h, w) * 0.004) | 1)
     bg = cv2.medianBlur(gray, k)
     diff = gray.astype(np.int16) - bg.astype(np.int16)
     cand = (diff > threshold).astype(np.uint8)
-    # smoothness of the surroundings: local std of the median-filtered image
+    # smoothness of the surroundings: local std of the median-filtered image, leaving out the
+    # candidates themselves. A speck about as wide as the median window leaks into the filtered
+    # copy, and counted in, it made its own surroundings look busy: on a 960-pixel portrait that
+    # turned away a quarter of dust-sized specks on plain ground.
     bgf = bg.astype(np.float32)
-    mean = cv2.blur(bgf, (k * 2 + 1, k * 2 + 1))
-    sq = cv2.blur(bgf * bgf, (k * 2 + 1, k * 2 + 1))
+    around = (cv2.dilate(cand, np.ones((3, 3), np.uint8)) == 0).astype(np.float32)
+    win = (k * 2 + 1, k * 2 + 1)
+    count = np.maximum(cv2.blur(around, win), 1e-3)
+    mean = cv2.blur(bgf * around, win) / count
+    sq = cv2.blur(bgf * bgf * around, win) / count
     local_std = np.sqrt(np.maximum(sq - mean * mean, 0))
+    # fine detail and the photo's grain level (robust std of it, from a quarter of the pixels)
+    gf = gray.astype(np.float32)
+    fine = gf - cv2.GaussianBlur(gf, (0, 0), 1.5)
+    grain = 1.4826 * float(np.median(np.abs(fine[::2, ::2])))
+    texture_limit = texture_factor * max(grain, grain_floor)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(cand, connectivity=8)
     max_area = max(12, int(h * w * max_area_fraction))
     thin = max(2, int(min(h, w) * 0.0012))
@@ -284,6 +304,13 @@ def dust_mask(img, protect=None, threshold=28, max_area_fraction=2.5e-5, smooth_
         std_here = float(np.median(local_std[y + ys, x + xs]))
         limit = smooth_std if (speck or short_line) else smooth_std * 1.8
         if std_here > limit:
+            continue
+        r = max(bw, bh) // 2 + 9
+        cx, cy = x + bw // 2, y + bh // 2
+        ya, yb, xa, xb = max(0, cy - r), min(h, cy + r + 1), max(0, cx - r), min(w, cx + r + 1)
+        comp = (labels[ya:yb, xa:xb] == i).astype(np.uint8)
+        ring = ~(cv2.dilate(comp, np.ones((5, 5), np.uint8)) > 0) & (labels[ya:yb, xa:xb] == 0)
+        if ring.sum() >= 20 and float(fine[ya:yb, xa:xb][ring].std()) > texture_limit:
             continue
         keep[i] = True
     mask = keep[labels]

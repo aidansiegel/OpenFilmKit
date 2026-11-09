@@ -8,9 +8,11 @@ PyTorch and onnxruntime, and faces come from YuNet (see clean.find_faces) instea
    1700 px on its long side (where it finds the most damage; at 2x and 4x it finds less), run in
    overlapping 512 px tiles.
 2. The mask (build_mask), from that probability:
-   - faces (box widened by 30 %) use a lower threshold and two extra speck finders, because dust
-     on a face is what people notice; only each eye's catchlight is protected there, and inside
-     the eyes only confident detections count (iris texture is not dust);
+   - the skin of each face (see skin_area) uses a lower threshold and two extra speck finders,
+     because dust on a face is what people notice; only each eye's catchlight is protected there,
+     and inside the eyes only confident detections count (iris texture is not dust). The archive
+     pipeline applied this to the whole face box widened by 30 %, which takes in the hair: on a
+     1984 NASA portrait that filled 2,770 pixels of hair strands that were not damage;
    - a thick detection darker than its surroundings is scene (a shadow, a trench), not damage:
      dust and emulsion scratches on a negative print bright;
    - the scan's own edge and the camera date stamp are never touched.
@@ -96,6 +98,44 @@ def face_box(f, shape):
     fw, fh = x1 - x0, y1 - y0
     return (max(0, int(x0 - FACE_PAD * fw)), max(0, int(y0 - FACE_PAD * fh)),
             min(w, int(x1 + FACE_PAD * fw)), min(h, int(y1 + FACE_PAD * fh)), fw)
+
+
+def skin_area(img, faces, texture_factor=2.5, grain_floor=1.5):
+    """The skin in each face's zone, where the face rules apply: smooth (fine detail within
+    texture_factor times the photo's grain, as in restore.dust_mask) and, in a color photo, close
+    in color to the middle of the face. Small gaps and holes are closed, so a scratch or speck
+    on a cheek still counts as skin; masses of hair, eyebrows, collars and hats do not."""
+    h, w = img.shape[:2]
+    out = np.zeros((h, w), bool)
+    if not faces:
+        return out
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    fine = gray - cv2.GaussianBlur(gray, (0, 0), 1.5)
+    limit = texture_factor * max(1.4826 * float(np.median(np.abs(fine[::2, ::2]))), grain_floor)
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB).astype(np.float32)
+    for f in faces:
+        l, t, r, b, fw = face_box(f, img.shape)
+        x0, y0, x1, y1 = f['box']
+        core = lab[int(y0 + 0.45 * (y1 - y0)):int(y0 + 0.85 * (y1 - y0)),
+                   int(x0 + 0.3 * (x1 - x0)):int(x0 + 0.7 * (x1 - x0))].reshape(-1, 3)
+        if r <= l or b <= t or len(core) < 20:
+            continue
+        L0, a0, b0 = np.median(core, axis=0)
+        reg, fr = lab[t:b, l:r], fine[t:b, l:r]
+        k = max(3, int(0.04 * fw) | 1)
+        local = np.sqrt(np.maximum(cv2.blur(fr * fr, (k, k)) - cv2.blur(fr, (k, k)) ** 2, 0))
+        near = np.abs(reg[..., 0] - L0) < 70
+        if np.hypot(a0 - 128, b0 - 128) > 6:   # a color photo: skin is near the face's own color
+            near &= (np.abs(reg[..., 1] - a0) < 14) & (np.abs(reg[..., 2] - b0) < 16)
+        skin = ((local <= limit) & near).astype(np.uint8)
+        c = max(3, int(0.03 * fw) | 1)
+        skin = cv2.morphologyEx(skin, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (c, c)))
+        skin = cv2.morphologyEx(skin, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (c, c)))
+        # fill holes: flood the non-skin from a frame round the zone; what it can't reach is a hole
+        outside = np.pad(1 - skin, 1, constant_values=1)
+        cv2.floodFill(outside, None, (0, 0), 2)
+        out[t:b, l:r] |= (skin > 0) | (outside[1:-1, 1:-1] == 1)
+    return out
 
 
 def eye_masks(gray, faces):
@@ -288,12 +328,13 @@ def build_mask(img, prob, protect, faces, dust_mask=None, thr=0.4, face_thr=0.15
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
     protect = protect.copy()
     thresh = np.full((h, w), thr, np.float32)
-    faces_area = np.zeros((h, w), bool)
+    faces_area = np.zeros((h, w), bool)   # whole widened face boxes: for long lines and the stamp
     for f in faces:
         l, t, r, b, _ = face_box(f, img.shape)
-        thresh[t:b, l:r] = face_thr
         faces_area[t:b, l:r] = True
         protect[t:b, l:r] = False
+    skin = skin_area(img, faces)
+    thresh[skin] = face_thr
     catch, irises = eye_masks(gray, faces)
     protect |= catch
     thresh[irises] = thr
@@ -308,14 +349,15 @@ def build_mask(img, prob, protect, faces, dust_mask=None, thr=0.4, face_thr=0.15
     if faces:
         # fibers on bright skin have a soft halo: fill a little wider inside faces (not the eyes)
         wider = cv2.dilate(mask, np.ones((4 * grow + 1, 4 * grow + 1), np.uint8))
-        widen = faces_area & ~irises
+        widen = skin & ~irises
         mask[widen] = wider[widen]
         add = np.zeros((h, w), bool)
         if dust_mask is not None:
-            add |= dust_mask(img, protect=protect, threshold=face_speck_thr, max_crowd=12) & faces_area
+            add |= dust_mask(img, protect=protect, threshold=face_speck_thr, max_crowd=12) & skin
         add |= face_flecks(img, faces, protect)
         add &= ~irises
         stats['face_extra_px'] = int((add & (mask == 0)).sum())
+        stats['skin_px'] = int(skin.sum())
         mask[add] = 1
     mask[protect] = 0
     edge = round(max(w, h) * 0.004)  # the scan's own edge reads as a scratch; the crop step owns it

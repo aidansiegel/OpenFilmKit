@@ -1,0 +1,2 @@
+# Test data, so the tests run from the source package too.
+recursive-include tests/fixtures *
