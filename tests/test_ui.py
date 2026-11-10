@@ -281,26 +281,69 @@ class App(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.cells(app, 5)[3], 'waiting')
         self.assertEqual(ran, [(['convert', str(self.roll / 'masters' / 'frame-03.tif'), '--tiff'], 'converting…')])
 
-    async def test_commands_run_one_at_a_time(self):
+    async def test_commands_run_one_at_a_time_in_one_thread(self):
         app = ui_app.OpenFilmKitApp(self.roll)
         async with app.run_test(size=(120, 40)) as pilot:
-            started = []
+            started, active = [], []
 
             class Proc:
                 def __init__(self, argv, **kw):
-                    started.append((argv[-1], app.one_at_a_time.locked()))
+                    active.append(1)
+                    started.append((argv[-1], len(active)))
                     self.stdout, self.returncode = iter(['working']), 0
 
                 def wait(self):
-                    time.sleep(0.2)
+                    time.sleep(0.1)
+                    active.pop()
 
             with mock.patch.object(ui_app.subprocess, 'Popen', Proc):
-                app.start_command(['models', 'one'], [], 'x')
-                app.start_command(['models', 'two'], [], 'x')
-                await pilot.pause(0.1)
-                self.assertEqual(len(started), 1)              # the second waits for the first
-                await app.workers.wait_for_complete()
-            self.assertEqual([a for a, _ in started], ['one', 'two'])
+                for n in range(20):                            # more than the threads previews share
+                    app.start_command(['models', str(n)], [], 'x')
+                self.assertEqual(len([w for w in app.workers if w.group == 'commands']), 1)
+                await pilot.press('b')                         # previews still load meanwhile
+                for _ in range(20):
+                    await pilot.pause(0.1)
+                    if str(app.query_one('#preview-caption').render()).startswith('before:'):
+                        break
+                self.assertTrue(str(app.query_one('#preview-caption').render()).startswith('before:'))
+                self.assertLess(len(started), 20)              # while commands were still running
+                while len(started) < 20 or active:
+                    await pilot.pause(0.1)
+            self.assertEqual(started, [(str(n), 1) for n in range(20)])
+
+    async def test_quitting_runs_no_more_waiting_commands(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        ran = []
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.run_command = lambda argv, about, doing: ran.append(argv) or time.sleep(0.3)
+            app.start_command(['models', 'one'], [], 'x')
+            app.start_command(['models', 'two'], [], 'x')
+            await pilot.pause(0.1)
+        time.sleep(0.5)
+        self.assertEqual(ran, [['models', 'one']])
+
+    async def test_panning_shows_the_new_part(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        regions = []
+        async with app.run_test(size=(120, 40)) as pilot:
+            await self.caption_after(app, pilot, 'z')
+            real = app.make_preview
+            app.make_preview = lambda item, view, region: regions.append(region) or real(item, view, region)
+            await self.caption_after(app, pilot, 'l')
+            await self.caption_after(app, pilot, 'l', 'l', 'l', 'l')   # past the edge: stays at it
+            await self.caption_after(app, pilot, 'h')
+            self.assertEqual(app.region(), (0.375, 0.25, 0.875, 0.75))   # one step back, from the edge
+        self.assertEqual(regions, [(0.375, 0.25, 0.875, 0.75), (0.5, 0.25, 1.0, 0.75)])   # then from the cache
+
+    async def test_a_master_converted_twice_is_converted_once_more(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        ran = []
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.run_command = lambda argv, about, doing: ran.append(argv)
+            await pilot.press('down', 'm', 'down', 'm', 'v')  # frame-02's JPEG and its PNG
+            await pilot.click('#go')
+            await pilot.pause()
+        self.assertEqual(ran, [['convert', str(self.roll / 'masters' / 'frame-02.tif')]])
 
     async def test_a_blocky_preview_says_so_once(self):
         app = ui_app.OpenFilmKitApp(self.roll)

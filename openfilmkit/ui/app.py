@@ -10,9 +10,8 @@ its output in the log.
 """
 import subprocess
 import sys
-import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from pathlib import Path
 
 import textual_image.renderable  # asks the terminal what it can draw, before Textual starts
@@ -208,11 +207,13 @@ class OpenFilmKitApp(App):
         self.spots = {}                  # str(cleaned copy) -> [[x, y, r]] in its pixels
         self.shown = None                # the item whose preview is showing, and its panels
         self.panels = []
+        self.showing = None              # everything the preview shows, so a refresh that changes none of it keeps it
         self.wanted = 0                  # the newest preview asked for; older loads are dropped
         self.previews = OrderedDict()    # (paths, view, region, mtimes) -> (image, caption)
         self.told_blocky = False
         self.running = {}                # key(item) -> what's being done to it
-        self.one_at_a_time = threading.Lock()
+        self.pending = deque()           # commands waiting their turn: (argv, about, doing)
+        self.runner = False              # whether run_commands is working through them
         self.hosts, self.queues = configured()
         self.sub_title = __version__
 
@@ -249,12 +250,12 @@ class OpenFilmKitApp(App):
         """What a frame is known by while it's marked or worked on: its conversion, or its master."""
         return item.source or item.master
 
-    def show_place(self):
+    def show_place(self, force=False):
         self.items = model.items(self.place)
         self.marked &= {self.key(i) for i in self.items}
         self.query_one('#title', Static).update(
             f'{self.place.name} · {model.roll_title(self.place)} · {len(self.items)} photos')
-        self.fill_table()
+        self.fill_table(force)
 
     def state_of(self, item):
         if self.key(item) in self.running:
@@ -266,7 +267,7 @@ class OpenFilmKitApp(App):
         spots = len(self.spots.get(str(item.latest), []))
         return item.state + (f" · {spots} spot{'s' if spots != 1 else ''}" if spots else '')
 
-    def fill_table(self):
+    def fill_table(self, force=False):
         table = self.query_one('#frames', DataTable)
         row = table.cursor_row
         table.clear()
@@ -276,7 +277,7 @@ class OpenFilmKitApp(App):
                           f'v{len(item.cleaned)}' if item.cleaned else '—', self.state_of(item), key=str(i))
         if self.items:
             table.move_cursor(row=min(max(row, 0), len(self.items) - 1))
-        self.show_item()
+        self.show_item(force)
 
     def current(self):
         table = self.query_one('#frames', DataTable)
@@ -284,12 +285,21 @@ class OpenFilmKitApp(App):
             return None
         return self.items[table.cursor_row]
 
-    def show_item(self):
+    def show_item(self, force=False):
+        """Show the selected photo's recipe and preview. The preview is loaded again only when
+        something it shows has changed (or with `force`), so the table being filled again, as
+        commands start and end and the queue is looked at, doesn't keep restarting it."""
         item = self.current()
         if (self.key(item) if item else None) != self.shown:
             self.shown = self.key(item) if item else None
             self.zoom, self.center = 1, (0.5, 0.5)    # a new photo starts whole
         self.query_one('#recipe', Static).update('\n'.join(model.describe(item)) if item else 'No photos here.')
+        showing = (item.source, item.master, item.latest, tuple(map(tuple, self.spots.get(str(item.latest), []))))\
+            if item else None
+        showing = (showing, self.view, self.region(), self.spotting)
+        if showing == self.showing and not force:
+            return
+        self.showing = showing
         self.wanted += 1
         self.query_one('#preview-caption', Static).update(f'{self.view} …')
         self.load_preview(item, self.view, self.region(), self.wanted)
@@ -440,20 +450,22 @@ class OpenFilmKitApp(App):
         self.fill_table()
 
     def action_zoom(self, factor):
-        zoom = min(max(self.zoom * factor, 1), MOST_ZOOM)
-        if zoom == self.zoom and factor != 2:
-            return
-        self.zoom = zoom
-        region = self.region()
-        self.center = ((region[0] + region[2]) / 2, (region[1] + region[3]) / 2) if region else (0.5, 0.5)
-        self.show_item()
+        self.zoom = min(max(self.zoom * factor, 1), MOST_ZOOM)
+        self.reframe()
 
     def action_pan(self, dx, dy):
         if self.zoom <= 1:
             return
         step = 0.25 / self.zoom                   # a quarter of what's shown
         self.center = (self.center[0] + dx * step, self.center[1] + dy * step)
-        self.action_zoom(1)
+        self.reframe()
+
+    def reframe(self):
+        """Show the part of the picture the zoom and center say, the center kept where the part
+        stays inside the picture (so panning past an edge doesn't build up)."""
+        region = self.region()
+        self.center = ((region[0] + region[2]) / 2, (region[1] + region[3]) / 2) if region else (0.5, 0.5)
+        self.show_item()
 
     def action_back(self):
         if self.spotting:
@@ -503,8 +515,8 @@ class OpenFilmKitApp(App):
         found = [i for i in marked or [self.current()] if i and can(i)]
         return found or None
 
-    def action_refresh(self):
-        self.show_place()
+    def action_refresh(self, force=True):
+        self.show_place(force)
         if self.queues:
             self.look_at_queue()
 
@@ -534,9 +546,7 @@ class OpenFilmKitApp(App):
                      f"spot{'s' if len(spots) != 1 else ''} you marked land in the same places.")
 
         def start(args):
-            if args is not None:
-                for item in spotted:
-                    self.spots.pop(str(item.latest), None)
+            if args is not None:   # the spots stay with the old copy: shown again if the clean fails
                 where = f" on {args[args.index('--on') + 1]}" if '--on' in args else \
                     ' into the queue' if '--queue' in args else ''
                 self.start_command(['clean', *(str(i.source) for i in chosen), *args],
@@ -550,6 +560,7 @@ class OpenFilmKitApp(App):
         if not chosen:
             self.notify('No scan master to convert here', severity='warning')
             return
+        chosen = list({i.master: i for i in chosen}.values())   # a frame converted twice is one master
 
         def start(args):
             if args is not None:
@@ -572,8 +583,21 @@ class OpenFilmKitApp(App):
         it's `about` meanwhile."""
         for k in about:
             self.running[k] = 'waiting'
+        self.pending.append((argv, about, doing))
+        if not self.runner:
+            self.runner = True
+            self.run_commands()
+        else:
+            self.log_line(f'[dim]waiting to run: openfilmkit {" ".join(argv)}[/dim]')
         self.fill_table()
-        self.run_command(argv, about, doing)
+
+    def next_command(self):
+        """The next command to run (on the UI's thread, so start_command can't slip one in as the
+        runner stops), or None: then the runner stops."""
+        if self.pending and self.is_running:
+            return self.pending.popleft()
+        self.runner = False
+        return None
 
     def _doing(self, about, doing):
         for k in about:
@@ -584,25 +608,34 @@ class OpenFilmKitApp(App):
         self.fill_table()
 
     @work(thread=True, group='commands')
+    def run_commands(self):
+        """Run the waiting commands one after another, in one thread however many wait (they'd
+        otherwise each hold one of the threads previews load in). Quitting runs no more of them."""
+        while True:
+            try:
+                command = self.call_from_thread(self.next_command) if self.is_running else None
+            except RuntimeError:                  # the app closed meanwhile
+                command = None
+            if command is None:
+                return
+            self.run_command(*command)
+
     def run_command(self, argv, about, doing):
         """Run an openfilmkit command (as a separate process, so its memory goes when it ends; one at
         a time, since cleaning a big scan takes most of a small machine's memory), showing what it says."""
-        if self.one_at_a_time.locked():
-            self.from_thread(self.log_line, f'[dim]waiting to run: openfilmkit {" ".join(argv)}[/dim]')
-        with self.one_at_a_time:
-            self.from_thread(self._doing, about, doing)
-            self.from_thread(self.log_line, f'[b]openfilmkit {" ".join(argv)}[/b]')
-            try:
-                proc = subprocess.Popen([sys.executable, '-m', 'openfilmkit', *argv], stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True, bufsize=1)
-                for line in proc.stdout:
-                    self.from_thread(self.log_line, line.rstrip())
-                proc.wait()
-                self.from_thread(self.log_line, '[green]done[/green]' if proc.returncode == 0
-                                 else f'[red]ended with status {proc.returncode}[/red]')
-            finally:
-                self.from_thread(self._doing, about, None)
-                self.from_thread(self.action_refresh)
+        self.from_thread(self._doing, about, doing)
+        self.from_thread(self.log_line, f'[b]openfilmkit {" ".join(argv)}[/b]')
+        try:
+            proc = subprocess.Popen([sys.executable, '-m', 'openfilmkit', *argv], stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, bufsize=1)
+            for line in proc.stdout:
+                self.from_thread(self.log_line, line.rstrip())
+            proc.wait()
+            self.from_thread(self.log_line, '[green]done[/green]' if proc.returncode == 0
+                             else f'[red]ended with status {proc.returncode}[/red]')
+        finally:
+            self.from_thread(self._doing, about, None)
+            self.from_thread(self.action_refresh, False)   # new files have new names: shown if they're this photo's
 
     @work(thread=True, exclusive=True, group='queue')
     def look_at_queue(self):
