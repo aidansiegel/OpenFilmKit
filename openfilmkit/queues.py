@@ -10,7 +10,7 @@ queue and writing its own drop folder.
   drop/<worker>/leases/<id>.json   its claim on a job, renewed every RENEW s, void after LEASE s
   drop/<worker>/checkpoints/<id>/  the slow stages of a job under way, pushed as they finish
   drop/<worker>/results/<id>/out/  a finished result, its recipe last
-  drop/<worker>/failed/<id>.json   a job that failed there, and why
+  drop/<worker>/failed/<id>/why.json  a job that failed there, and why
   jobs/<id>/rejected.json          results collecting turned down (when it couldn't delete them)
 
 A worker picks the oldest job it can do: the build that packed it, an estimated peak memory
@@ -160,9 +160,9 @@ class View:
                     held['rejected'].append(jid)
                 else:
                     self.results.setdefault(jid, []).append(w.name)
-            for p in (w / 'failed').glob('*.json'):
-                held['failed'].append(p.stem)
-                self.failed.setdefault(p.stem, []).append(dict(_read_json(p) or {}, worker=w.name))
+            for p in (w / 'failed').glob('*/why.json'):
+                held['failed'].append(p.parent.name)
+                self.failed.setdefault(p.parent.name, []).append(dict(_read_json(p) or {}, worker=w.name))
             for p in (w / 'checkpoints').glob('*'):
                 if p.is_dir():
                     held['checkpoints'].append(p.name)
@@ -177,11 +177,14 @@ def pull_view(spec, ssh_command, folder):
     workers hold checkpoints) into `folder`, and read them."""
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
-    ok = _rsync(ssh_command, '--delete', '--include=/jobs/', '--include=/jobs/*/', '--include=/jobs/*/job.json',
+    # --ignore-times: these small files can change within a second at the same size (a redone
+    # result's recipe), which rsync's quick check would miss.
+    ok = _rsync(ssh_command, '--delete', '--ignore-times', '--include=/jobs/', '--include=/jobs/*/',
+                '--include=/jobs/*/job.json',
                 '--include=/jobs/*/rejected.json',
                 '--include=/drop/', '--include=/drop/*/', '--include=/drop/*/worker.json',
                 '--include=/drop/*/leases/', '--include=/drop/*/leases/*.json',
-                '--include=/drop/*/failed/', '--include=/drop/*/failed/*.json',
+                '--include=/drop/*/failed/', '--include=/drop/*/failed/*/', '--include=/drop/*/failed/*/why.json',
                 '--include=/drop/*/checkpoints/', '--include=/drop/*/checkpoints/*/',
                 '--include=/drop/*/results/', '--include=/drop/*/results/*/', '--include=/drop/*/results/*/out/',
                 '--include=/drop/*/results/*/out/*.json', '--exclude=*', f'{spec}/', f'{folder}/', quiet=True)
@@ -325,7 +328,7 @@ def collect(q, to=None, say=print):
         _remote(q, 'rm', '-rf', '--', _path(q, 'jobs', jid))
         # The workers' files, where collecting may delete them (otherwise each worker clears its own).
         paths = [_path(q, 'drop', w, sub, jid) for w in view.drops for sub in ('results', 'checkpoints')]
-        paths += [_path(q, 'drop', w, 'failed', f'{jid}.json') for w in view.drops]
+        paths += [_path(q, 'drop', w, 'failed', jid) for w in view.drops]
         if paths:
             _remote(q, 'rm', '-rf', '--', *paths, quiet=True)
         shutil.rmtree(package, ignore_errors=True)
@@ -422,7 +425,13 @@ class Worker:
 
     # -- writing to the drop folder
     def _push(self):
-        ok = _rsync(self.s['ssh_command'], '--exclude=.*', f'{self.mirror}/', f"{self.s['drop']}/", quiet=True)
+        ok = _rsync(self.s['ssh_command'], '--exclude=.*', '--exclude=/results/', f'{self.mirror}/',
+                    f"{self.s['drop']}/", quiet=True)
+        # A result always replaces what's there: a redone one can match a turned-down one in size
+        # and (to the second) in time, which rsync would otherwise take for the same file.
+        (self.mirror / 'results').mkdir(parents=True, exist_ok=True)
+        ok &= _rsync(self.s['ssh_command'], '--ignore-times', '--exclude=.*', f'{self.mirror}/results/',
+                     f"{self.s['drop']}/results/", quiet=True)
         ok &= _rsync(self.s['ssh_command'], '--delete', '--exclude=.*', f'{self.mirror}/leases/',
                      f"{self.s['drop']}/leases/", quiet=True)
         self._pushed = ok
@@ -467,14 +476,16 @@ class Worker:
         refused = set(held.get('rejected', []))
         if not gone | refused:
             return
+        for kind in ('results', 'checkpoints', 'failed'):
+            for jid in sorted(gone | (refused if kind == 'results' else set())):
+                self._empty(kind, jid)
+
+    def _empty(self, kind, jid):
+        """Empty drop/<kind>/<jid>/ (syncing an empty folder into it works with every rsync; the
+        empty folder left behind counts for nothing)."""
         empty = self.state / 'empty'
         empty.mkdir(parents=True, exist_ok=True)
-        for kind in ('results', 'checkpoints', 'failed'):
-            names = []
-            for jid in sorted(gone | (refused if kind == 'results' else set())):
-                names += [f'--include=/{jid}.json'] if kind == 'failed' else [f'--include=/{jid}/', f'--include=/{jid}/**']
-            _rsync(self.s['ssh_command'], '-r', '--delete', *names, '--exclude=*', f'{empty}/',
-                   f"{self.s['drop']}/{kind}/", quiet=True)
+        _rsync(self.s['ssh_command'], '-r', '--delete', f'{empty}/', f"{self.s['drop']}/{kind}/{jid}/", quiet=True)
 
     def _lease(self, jid, claimed=None):
         now = self.now()
@@ -564,7 +575,7 @@ class Worker:
             return False
         except jobs.JobError as e:
             self.say(f'{jid[:12]}: failed: {e}')
-            _write_json(self.mirror / 'failed' / f'{jid}.json', {'job': jid, 'error': str(e), 'at': self.now()})
+            _write_json(self.mirror / 'failed' / jid / 'why.json', {'job': jid, 'error': str(e), 'at': self.now()})
             self.current = None
             self.release(jid)
             return False
@@ -579,6 +590,7 @@ class Worker:
             self.release(jid)
             shutil.rmtree(package, ignore_errors=True)
             return False
+        self._empty('results', jid)   # no leftovers from a turned-down run
         result = self.mirror / 'results' / jid / 'out'
         result.mkdir(parents=True, exist_ok=True)
         for f in sorted((package / 'out').iterdir()):   # the image, then its recipe

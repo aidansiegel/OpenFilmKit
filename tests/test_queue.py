@@ -143,7 +143,7 @@ class Queue(unittest.TestCase):
             queues.collect(self.q, say=lambda *a: None)
         self.assertTrue((self.queue / 'drop' / 'w1' / 'results' / jid).exists())
         w1.once()                                                          # the next look tidies up
-        self.assertFalse((self.queue / 'drop' / 'w1' / 'results' / jid).exists())
+        self.assertEqual([p for p in (self.queue / 'drop' / 'w1' / 'results' / jid).rglob('*') if p.is_file()], [])
 
     def test_a_bad_result_collecting_may_not_delete_is_turned_down_and_redone(self):
         self.queue_photos()
