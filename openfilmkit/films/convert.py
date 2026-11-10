@@ -3,9 +3,11 @@
 Reads the kit's own masters and the raw scans SilverFast (48-bit HDR, 64-bit HDRi) and VueScan (48-bit raw,
 64-bit RGBI raw) save, so scans made with those on any system convert the same way.
 
-Ported from the author's earlier film-scan tool (film_convert.py). The LUTs and rendering are unchanged, so output
-matches film-scan byte for byte; capture records may be film-scan's or the kit's, and roll
-choices come from the roll folder's roll.json.
+Ported from the author's earlier film-scan tool (film_convert.py). The LUTs and rendering are unchanged, so a
+full-size conversion matches film-scan byte for byte; a smaller copy averages each block of scan pixels where
+film-scan kept one of them (less grain, no aliasing, small specks kept). Capture records may be film-scan's or the
+kit's, and roll choices come from the roll folder's roll.json. Each conversion records what the scan's channels
+hold (see health.py), so a clamped or stretched channel is reported, not silently converted.
 """
 from pathlib import Path
 import datetime,hashlib,json,math,struct
@@ -13,7 +15,7 @@ import numpy as np
 import tifffile
 from PIL import Image,ImageCms
 from . import density as film_density, stocks as film_stocks
-from .. import roll as rolls
+from .. import health as scan_health, roll as rolls
 Image.MAX_IMAGE_PIXELS=None
 CHANNELS=('Red','Green','Blue')
 
@@ -44,6 +46,16 @@ def raw_open(path):
     return np.moveaxis(a[:3],0,-1) if planar else a[:,:,:3]
 
 OUTPUTS=('.jpg','.jpeg','.png','.tif','.tiff')
+
+def shrink(a,f):
+    """Every f x f block of raw RGB16 averaged into one pixel (blocks in the last row and column may be smaller).
+    The raw scan is linear, so this averages the light itself: a smaller copy keeps every pixel's share instead of
+    one pixel in f*f, which left full-size grain, aliased it, and let specks smaller than a block disappear."""
+    if f==1:return a
+    h,w=a.shape[:2];rows,cols=np.arange(0,h,f),np.arange(0,w,f)
+    total=np.add.reduceat(np.add.reduceat(np.asarray(a,np.uint32),rows,axis=0),cols,axis=1)
+    n=np.minimum(f,h-rows)[:,None]*np.minimum(f,w-cols)[None,:]
+    return np.rint(total/n[:,:,None]).astype(np.uint16)
 
 def write_tiff(dest,pixels,icc):
     """A 16-bit (or 8-bit) RGB TIFF with the sRGB profile embedded, losslessly compressed (deflate with
@@ -167,7 +179,7 @@ def convert(args,root=film_stocks.DATA):
     if meta.get('sha256') and meta['sha256']!=digest:raise ValueError('Source TIFF does not match its capture checksum.')
     raw=raw_open(source);h,w=raw.shape[:2];box=args.crop or [0,0,w,h];x0,y0,x1,y1=box
     if not (0<=x0<x1<=w and 0<=y0<y1<=h):raise ValueError('Crop lies outside the source TIFF.')
-    area=raw[y0:y1,x0:x1]
+    area=raw[y0:y1,x0:x1];health=scan_health.check(area)
     if args.levels_from:
         prior_path=Path(args.levels_from).expanduser().resolve();prior=film_stocks.read(prior_path)
         if prior['film_selection']['profile_id']!=chosen['profile_id'] or prior['film_selection']['stock_id']!=chosen['stock_id']:
@@ -189,15 +201,16 @@ def convert(args,root=film_stocks.DATA):
         lut=film_density.density_lut(model,plan['film_base_transmission_rgb'],scene['density_offsets_rgb'],scene['density_black'],scene['density_white'],profile_strength=plan.get('profile_strength',.4),mid=scene.get('density_mid'),mid_target=scene.get('density_mid_target',.58))
         calibrated=dict(plan=str(plan_path),plan_sha256=sha(plan_path),scene=scene,film_base_transmission_rgb=plan['film_base_transmission_rgb'],recover_clipped_blue=bool(saved_roll.get('recover_clipped_blue',False) if getattr(args,'recover_clipped_blue',None) is None else args.recover_clipped_blue),note='Measured viewing correction; missing blue estimates are not restored capture detail.')
     else:lut=slide_lut(model,lo,hi) if film=='slide' else make_lut(model,lo,hi)
-    stride=1 if args.max_side==0 else max(1,math.ceil(max(area.shape[:2])/args.max_side));view=area[::stride,::stride];hh,ww=view.shape[:2]
+    stride=1 if args.max_side==0 else max(1,math.ceil(max(area.shape[:2])/args.max_side));hh,ww=-(-area.shape[0]//stride),-(-area.shape[1]//stride)
     dest.parent.mkdir(parents=True,exist_ok=True)
     pixels=np.memmap(scratch,mode='w+',dtype='uint16' if deep else 'uint8',shape=(hh,ww,3))
     try:
         for start in range(0,hh,64):
+            strip=shrink(area[start*stride:(start+64)*stride],stride)
             if calibrated:
                 if args.warmth:raise ValueError('Use neutral scene anchors instead of warmth with density calibration.')
-                pixels[start:start+64]=film_density.render_density(view[start:start+64],lut,args.contrast,args.gamma,calibrated['recover_clipped_blue'],top)
-            else:pixels[start:start+64]=render(view[start:start+64],lut,args.contrast,args.gamma,args.warmth,top)
+                pixels[start:start+64]=film_density.render_density(strip,lut,args.contrast,args.gamma,calibrated['recover_clipped_blue'],top)
+            else:pixels[start:start+64]=render(strip,lut,args.contrast,args.gamma,args.warmth,top)
         pixels.flush();icc=srgb_icc()
         if deep:write_tiff(dest,pixels,icc)
         else:
@@ -205,7 +218,7 @@ def convert(args,root=film_stocks.DATA):
     finally:
         del pixels;scratch.unlink(missing_ok=True)
     np.save(lutfile,lut)
-    record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,output_dimensions=[ww,hh],source_dimensions=[w,h],output=str(dest),output_sha256=sha(dest),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(lutfile),raw_tiffs_modified=False,approved=False)
+    record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,output_dimensions=[ww,hh],source_dimensions=[w,h],downscale=dict(method='block average',block=stride) if stride>1 else None,channel_health=health,output=str(dest),output_sha256=sha(dest),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(lutfile),raw_tiffs_modified=False,approved=False)
     if calibrated:record['density_calibration']=calibrated
     if sha(source)!=digest:raise RuntimeError('Source checksum changed during conversion.')
     recipe.write_text(json.dumps(record,indent=2)+'\n')

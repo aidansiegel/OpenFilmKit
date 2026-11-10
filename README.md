@@ -34,6 +34,7 @@ a checkout with `tools/build_sane.py`); on Windows, scan with SilverFast or VueS
 openfilmkit doctor                      # driver, scanner, identification
 openfilmkit roll new roll-07 --film color-negative --stock kodak-gold200
 openfilmkit scan roll-07 --frames 6     # linear 48-bit TIFF masters, one frame at a time
+openfilmkit check roll-07/masters/*.tif # what each channel holds: clipping, digital stretching
 openfilmkit convert roll-07/masters/frame-01.tif
 openfilmkit clean roll-07               # dust and holder edges, on new copies
 ```
@@ -42,9 +43,18 @@ Every command takes `--json`. Masters are never changed; every conversion and cl
 recipe beside it that says exactly how it was made.
 
 - `scan --full-area` scans the driver's whole area instead of its default selection.
+- `scan` and `convert` also look at what each channel of the scan holds, and say so if one is
+  clamped at 0 or at full scale (detail lost there) or never uses many of the codes in its range
+  (stretched digitally, so fewer real levels than 16 bits). A file can pass every structural check
+  and still have that: the GL128 driver's blue offset bug left blue at exactly 0 over much of a
+  frame. `openfilmkit check` does the same for any scan, yours or SilverFast's or VueScan's, and
+  exits with status 1 if anything is wrong. The findings go in the capture record and the
+  conversion's recipe.
 - `convert` picks the film's response curve from `openfilmkit stocks` / `openfilmkit profiles`
   (142 profiles digitized from manufacturers' data sheets). `--tiff` writes a 16-bit TIFF at full
-  resolution instead of a JPEG (see below).
+  resolution instead of a JPEG (see below). A smaller copy, like the default 1800 px JPEG, averages
+  each block of scan pixels, so it has less grain than the scan thinned and keeps small specks for
+  `clean` to find.
 - `clean` removes dust and fibers and trims film-holder edges, always on a new copy. Eyes and
   mouths, and the camera's date stamp (bright or printed faintly, upright or down the side), are
   left untouched by dust removal; faces are found in any orientation, so sideways frames are

@@ -4,8 +4,9 @@ Ported from the author's earlier film-scan tool. The master is written to name.t
 only after every strip decodes and depth, channels, resolution and (with a
 profile) frame size check out. name.tif.json records the scanner, its
 identification and USB evidence, the runtime and its patches, the exact
-command and settings, and the SHA-256. Failures keep the partial data and a
-failure record. Existing files are never replaced.
+command and settings, and the SHA-256, plus what each channel holds (see
+health.py: a well-formed file can still have a channel clamped at 0). Failures
+keep the partial data and a failure record. Existing files are never replaced.
 """
 import datetime
 import hashlib
@@ -88,6 +89,16 @@ def inspect_tiff(path):
             'decoded_all_strips': True}
 
 
+def channel_health(path):
+    """health.check() of the captured pixels; None (with why) if they can't be read here."""
+    try:
+        from . import health
+        from .films.convert import raw_open
+        return health.check(raw_open(path))
+    except (ImportError, ValueError, OSError) as e:
+        return {'error': str(e), 'channels': {}, 'warnings': []}
+
+
 def check_tiff(info, plan, prof):
     dpi = plan['dpi']
     if info['dpi_x'] != dpi or info['dpi_y'] != dpi:
@@ -131,6 +142,7 @@ def capture(runtime, out, device, plan, prof, scanner, film, options_text, estim
             raise CaptureError(f"scanimage exited with status {code}; see {p['log']}")
         info = inspect_tiff(p['partial'])
         check_tiff(info, plan, prof)
+        record['channel_health'] = channel_health(p['partial'])
         with p['partial'].open('rb') as f:
             digest = hashlib.file_digest(f, 'sha256').hexdigest()
         if p['out'].exists():

@@ -225,8 +225,28 @@ def cmd_convert(args, out):
     out.say(model['calibration'])
     out.say(f"Saved starting conversion: {record['output']}")
     out.say(f"Processing record: {record['output']}.json")
+    for w in record['channel_health']['warnings']:
+        out.say(f'! In the scan: {w}')
     out.result(record)
     return 0
+
+
+def cmd_check(args, out):
+    from . import health
+    from .films.convert import raw_open
+    reports, warned = {}, False
+    for name in args.scans:
+        try:
+            report = health.check(raw_open(Path(name).expanduser()))
+        except (ValueError, OSError) as e:
+            raise Fail(f'{name}: {e}')
+        out.say(f'{name}:')
+        for line in health.describe(report):
+            out.say(line)
+        warned |= bool(report['warnings'])
+        reports[name] = report
+    out.result(reports)
+    return 1 if warned else 0
 
 
 def cmd_clean(args, out):
@@ -502,7 +522,9 @@ def cmd_scan(args, out):
                     continue
             break
         out.say(f"\nSaved and verified: {dest}\nSHA-256: {record['sha256']}")
-        records.append({k: record[k] for k in ('output', 'status', 'sha256', 'bytes', 'tiff')})
+        for w in record['channel_health']['warnings']:
+            out.say(f'! {w}')
+        records.append({k: record[k] for k in ('output', 'status', 'sha256', 'bytes', 'tiff', 'channel_health')})
         frame += 1
     if frame == 1 and records and records[0]['status'] == 'captured_verified':
         out.say('Check framing, focus and exposure before scanning the rest of the roll.')
@@ -568,6 +590,11 @@ def parser():
     s.add_argument('--contrast', type=float, help='default 1.3 for negatives, 1.0 for slides')
     s.add_argument('--gamma', type=float, default=1.0, help='above 1 lifts midtones')
     s.add_argument('--warmth', type=float, default=0.0, help='small balance adjustment, -1 to +1')
+
+    s = sub.add_parser('check', parents=[common],
+                       help="what each channel of a scan holds: clipping at 0 or full scale, and codes a digital "
+                            'stretch left unused (exit status 1 if anything is wrong)')
+    s.add_argument('scans', nargs='+', help='linear RGB16 scans: masters, SilverFast or VueScan raw files')
 
     s = sub.add_parser('clean', parents=[common],
                        help='remove dust and holder edges from converted copies (new files + recipes)')
@@ -671,7 +698,7 @@ def cmd_models(args, out):
 
 COMMANDS = {'doctor': cmd_doctor, 'scanners': cmd_scanners, 'options': cmd_options,
             'scan': cmd_scan, 'stocks': cmd_stocks, 'profiles': cmd_profiles,
-            'convert': cmd_convert, 'clean': cmd_clean, 'models': cmd_models, 'job': cmd_job,
+            'convert': cmd_convert, 'check': cmd_check, 'clean': cmd_clean, 'models': cmd_models, 'job': cmd_job,
             'queue': cmd_queue, 'worker': cmd_worker, 'ui': cmd_ui}
 
 
