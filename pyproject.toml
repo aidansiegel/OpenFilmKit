@@ -29,8 +29,11 @@ dependencies = ["numpy>=1.24", "pillow>=10", "tifffile>=2024.1.30", "imagecodecs
 [project.optional-dependencies]
 # OpenCV 5 moved the Haar cascades (CascadeClassifier) out of the main package.
 clean = ["opencv-python-headless>=4.8,<5"]
-# The terminal UI (openfilmkit ui). textual-image uses Pillow 12.1's get_flattened_data.
-ui = ["textual>=8", "textual-image>=0.14", "pillow>=12.1"]
+# The terminal UI (openfilmkit ui). textual-image 0.13+ needs Python 3.12 and (from 0.14) Pillow
+# 12.1's get_flattened_data; on Python 3.11, 0.12 does the same job.
+ui = ["textual>=8",
+      "textual-image>=0.14; python_version >= '3.12'", "pillow>=12.1; python_version >= '3.12'",
+      "textual-image>=0.12,<0.13; python_version < '3.12'"]
 
 [project.urls]
 Homepage = "https://github.com/aidansiegel/OpenFilmKit"
