@@ -183,11 +183,18 @@ queue = "server:openfilmkit-queue"
 memory_gb = 2.5                      # largest job it takes (and only if the machine has it free)
 hours = "22-7"                       # start jobs only overnight (optional)
 yield_to = "photo-worker.service"    # make way while this service is using memory (optional)
+busy_when = ["curl -fs http://localhost/status.json | grep -Eq '\"state\": *\"(recording|finishing)\"'"]
+                                     # make way while any of these commands succeeds (optional)
 ```
 
 A worker takes the oldest job it can do: packed by the same OpenFilmKit code, an estimated memory
-need it can meet, inside its hours, and not while a service named in `yield_to` is busy (if one
-gets busy mid-job, the worker stops and comes back to it). It claims the job and renews the claim
+need it can meet, inside its hours, and not while a service named in `yield_to` is busy or a
+command in `busy_when` succeeds, such as a check that a live capture is running (if either
+happens mid-job, the worker stops and comes back to it). Nice and a CPU quota aren't enough
+beside live capture, which can't spare even a moment: give it a `busy_when`, and have whatever
+starts the capture freeze the worker (`systemctl freeze openfilmkit-worker`) and thaw it after.
+A worker frozen for hours carries on after the thaw: it retries the queue for a whole lease
+before giving up the job, and backs off only if another worker took the job meanwhile. It claims the job and renews the claim
 every two minutes; a claim not renewed for ten minutes lapses, and the next worker starts from
 the slow stages the last one pushed (the scratch model's results and every filled window), so a
 machine that dies or is switched off loses at most a few minutes of work. A worker that can't

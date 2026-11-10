@@ -9,6 +9,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -188,6 +189,74 @@ class Queue(unittest.TestCase):
         self.assertNotIn('done', [r['state'] for r in queues.status(self.q)['jobs'] if r['id'] == jid])
         self.assertFalse((self.queue / 'drop' / 'w1' / 'leases' / f'{jid}.json').exists())   # claim let go
         self.assertEqual(w.once(), jid)                                     # and taken up again later
+
+    def test_a_worker_takes_no_job_while_busy_when_says_so_and_stops_one_if_it_starts(self):
+        self.queue_photos()
+        self.assertIsNone(self.worker('w1', busy_when='true').once())        # a capture under way
+        flag = self.root / 'recording'
+
+        started = []
+
+        def runner(package, beat, every):
+            if not started:
+                started.append(flag.touch())                                # a capture starts mid-job
+            beat()
+            jobs.run(package)
+        w = self.worker('w1', run=runner, busy_when=[f'test -e "{flag}"'])
+        jid = w.once()
+        self.assertFalse((self.queue / 'drop' / 'w1' / 'results' / jid).exists())
+        self.assertFalse((self.queue / 'drop' / 'w1' / 'leases' / f'{jid}.json').exists())   # claim let go
+        flag.unlink()
+        self.assertEqual(w.once(), jid)                                     # done once it's over
+        self.assertIn(jid, [r['id'] for r in queues.status(self.q)['jobs'] if r['state'] == 'done'])
+
+    def test_a_check_that_hangs_counts_as_busy(self):
+        with mock.patch.object(queues.subprocess, 'run', side_effect=subprocess.TimeoutExpired('x', 10)):
+            self.assertEqual(queues.busy_command(['curl http://localhost/status.json']), 'curl http://localhost/status.json')
+        self.assertIsNone(queues.busy_command(['false']))
+
+    def test_a_worker_frozen_for_hours_carries_on_after_the_thaw(self):
+        self.queue_photos()
+        clock = [time.time()]
+        w = self.worker('w1', now=lambda: clock[0])
+        real_push, tries = w._push, []
+
+        def flaky_push():                                                   # the first beat after the thaw can't reach the queue
+            tries.append(1)
+            if len(tries) <= 2:
+                w._pushed = False
+                return False
+            return real_push()
+
+        def runner(package, beat, every):
+            clock[0] += 3 * 3600                                            # frozen for three hours
+            w._push = flaky_push
+            beat()                                                          # back: a failed renewal isn't the end
+            clock[0] += queues.RENEW
+            beat()                                                          # and the next one gets through
+            w._push = real_push
+            jobs.run(package)
+        w.run = runner
+        jid = w.once()
+        self.assertGreater(len(tries), 2)
+        self.assertTrue(any(r['id'] == jid and r['state'] == 'done' for r in queues.status(self.q)['jobs']))
+
+    def test_a_worker_frozen_while_another_took_its_job_backs_off(self):
+        self.queue_photos()
+        clock = [time.time()]
+        w1 = self.worker('w1', now=lambda: clock[0])
+
+        def runner(package, beat, every):
+            clock[0] += 3 * 3600
+            w2 = self.worker('w2', now=lambda: clock[0])                    # took the lapsed job meanwhile
+            w2._lease(jid_box[0], claimed=clock[0] - 60)
+            w2._push()
+            beat()
+            jobs.run(package)
+        jid_box = [w1.candidates(w1.view())[0]]
+        w1.run = runner
+        self.assertEqual(w1.once(), jid_box[0])
+        self.assertFalse((self.queue / 'drop' / 'w1' / 'results' / jid_box[0]).exists())
 
     def test_a_worker_that_cant_renew_its_claim_stops_without_publishing(self):
         self.queue_photos()

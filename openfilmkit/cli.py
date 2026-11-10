@@ -432,7 +432,7 @@ def cmd_worker(args, out):
     import signal
     try:
         s = queues.worker_settings(queue=args.queue, drop=args.drop, name=args.name, memory_gb=args.memory,
-                                   hours=args.hours, ssh_command=args.ssh_command)
+                                   hours=args.hours, ssh_command=args.ssh_command, busy_when=args.busy_when)
     except queues.QueueError as e:
         raise Fail(str(e))
 
@@ -657,6 +657,8 @@ def parser():
     s.add_argument('--memory', type=float, metavar='GB', help='largest job to take, in GB (default 2.5)')
     s.add_argument('--hours', metavar='START-END', help='only start jobs in these hours, e.g. 22-7')
     s.add_argument('--ssh-command', help='ssh command for rsync, e.g. "ssh -i ~/.ssh/queue_key"')
+    s.add_argument('--busy-when', action='append', metavar='COMMAND',
+                   help="a shell command that succeeds while this machine shouldn't run a job (repeatable)")
     s.add_argument('--once', action='store_true', help='do at most one job, then stop')
     s = j.add_parser('build', parents=[common], help="this OpenFilmKit's build: a fingerprint of its code")
     s = j.add_parser('remove', parents=[common], help='delete job packages (checked to be packages first)')

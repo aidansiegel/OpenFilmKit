@@ -22,6 +22,13 @@ the checkpoints the last one pushed, so the work isn't lost. A worker that can't
 for a whole LEASE stops the job, and one that finds a good result already there doesn't publish
 its own.
 
+A worker shares its machine. It takes no job, and stops one under way, while a systemd unit named
+in yield_to uses more than yield_mb of memory or a command in busy_when succeeds (a tape capture
+that can't spare a moment of CPU, say). It can also be frozen (`systemctl freeze`) for hours and
+thawed: it then counts from the thaw, retrying its connections for a whole lease before giving up
+the job, and carries on unless another worker took the job meanwhile. Every rsync gives up on a
+connection that has gone quiet, so one that died during a freeze doesn't hang the worker.
+
 Claims keep workers out of each other's way; they can't make two runs of one job impossible
 (rsync offers nothing atomic, and the machines' clocks may differ a little). That's safe by
 design: a job gives the same file wherever it runs, each worker writes only its own drop folder,
@@ -49,6 +56,7 @@ from . import __version__, jobs
 from .remote import config_file
 
 LEASE, RENEW, SETTLE, POLL, CHECK = 600, 120, 5, 60, 15
+QUIET = 120        # seconds an rsync waits on a connection that sends nothing before giving up
 NAME = re.compile(r'^[A-Za-z0-9._-]+$')
 JOB_ID = re.compile(r'^[0-9a-f]{64}$')
 SLOW_STAGES = ('scratch_probability.npz', 'fill-*.npz')   # worth pushing; the rest is quick to redo
@@ -99,7 +107,7 @@ def _split(spec):
 
 
 def _rsync(ssh_command, *args, quiet=False):
-    argv = ['rsync', '-a', '--partial', '-e', ssh_command, *args]
+    argv = ['rsync', '-a', '--partial', f'--timeout={QUIET}', '-e', ssh_command, *args]
     r = subprocess.run(argv, stdout=subprocess.DEVNULL if quiet else None,
                        stderr=subprocess.DEVNULL if quiet else None)
     return r.returncode == 0
@@ -344,7 +352,7 @@ def worker_settings(**given):
     """The worker's settings: hosts.toml's [worker] table, then `given` (from the command line)."""
     s = {'name': socket.gethostname().split('.')[0], 'ssh_command': 'ssh', 'memory_gb': 2.5, 'hours': None,
          'lease': LEASE, 'renew': RENEW, 'settle': SETTLE, 'poll': POLL, 'check': CHECK,
-         'yield_to': [], 'yield_mb': 300}
+         'yield_to': [], 'yield_mb': 300, 'busy_when': []}
     s.update(_config().get('worker', {}))
     s.update({k: v for k, v in given.items() if v is not None})
     if not s.get('queue'):
@@ -354,8 +362,9 @@ def worker_settings(**given):
     s.setdefault('drop', f"{s['queue'].rstrip('/')}/drop/{s['name']}")
     s['state'] = Path(s.get('state') or _cache() / 'worker')
     s['memory_gb'] = float(s['memory_gb'])
-    if isinstance(s['yield_to'], str):
-        s['yield_to'] = [s['yield_to']]
+    for key in ('yield_to', 'busy_when'):
+        if isinstance(s[key], str):
+            s[key] = [s[key]]
     return s
 
 
@@ -371,6 +380,22 @@ def busy(units, over_mb):
             continue   # not running, not systemd, or no figure ("[not set]")
         if used > over_mb * 1024 * 1024:
             return unit
+    return None
+
+
+def busy_command(commands):
+    """The first of these shell commands that succeeds (exit status 0), or None: something on the
+    machine says a job shouldn't run now. One that takes more than 10 s counts as saying so too,
+    since then it can't be told otherwise."""
+    for command in commands:
+        try:
+            r = subprocess.run(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except subprocess.TimeoutExpired:
+            return command
+        except OSError:
+            continue
+        if r.returncode == 0:
+            return command
     return None
 
 
@@ -446,6 +471,23 @@ class Worker:
 
     def view(self):
         return pull_view(self.s['queue'], self.s['ssh_command'], self.state / 'view')
+
+    def other_work(self):
+        """What on this machine a job would get in the way of, or None."""
+        unit = busy(self.s['yield_to'], self.s['yield_mb'])
+        if unit:
+            return unit
+        command = busy_command(self.s['busy_when'])
+        return f'busy_when ({command[:60]})' if command else None
+
+    def taken_meanwhile(self, jid):
+        """Whether another worker holds a live claim on the job (False if the queue can't be read:
+        then renewing decides)."""
+        try:
+            live = self.view().live_leases(jid, self.now())
+        except QueueError:
+            return False
+        return any(lease['worker'] != self.s['name'] for lease in live)
 
     # -- choosing and claiming
     def candidates(self, view):
@@ -550,12 +592,19 @@ class Worker:
         self.current = jid
         self.publish()
 
-        renewed = {'at': self.now(), 'ok': self.now()}
+        renewed = {'at': self.now(), 'ok': self.now(), 'beat': self.now()}
 
         def beat():   # every `check` seconds while the job runs
-            other = busy(self.s['yield_to'], self.s['yield_mb'])
+            other = self.other_work()
             if other:
                 raise Interrupted(f'{other} is at work')
+            now = self.now()
+            if now - renewed['beat'] > self.s['lease']:      # frozen (or asleep) longer than a lease
+                self.say(f'{jid[:12]}: back after {now - renewed["beat"]:.0f} s stopped')
+                if self.taken_meanwhile(jid):
+                    raise Interrupted('another worker took the job while this one was stopped')
+                renewed.update(at=now - self.s['renew'], ok=now)   # renew now, with a whole lease of tries
+            renewed['beat'] = now
             if self.now() - renewed['at'] >= self.s['renew']:
                 renewed['at'] = self.now()
                 self._lease(jid)
@@ -611,7 +660,7 @@ class Worker:
             return None
         view = self.view()
         self.tidy(view)
-        other = busy(self.s['yield_to'], self.s['yield_mb'])
+        other = self.other_work()
         if other:
             self.say(f'waiting: {other} is at work')
             return None
