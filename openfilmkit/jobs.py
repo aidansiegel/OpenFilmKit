@@ -48,14 +48,25 @@ def sha(path):
         return hashlib.file_digest(f, 'sha256').hexdigest()
 
 
+IMAGE_LIBRARIES = ('numpy', 'pillow', 'opencv-python-headless', 'opencv-python', 'tifffile', 'imagecodecs')
+
+
 @functools.lru_cache(maxsize=1)
 def build():
-    """A fingerprint of this OpenFilmKit's code (its Python files): two installs with the same one
-    give the same pixels, even between releases, when the version number alone can't tell."""
+    """A fingerprint of this OpenFilmKit's code (its Python files) and of the versions of the
+    libraries that read, compute and write its pixels: two installs with the same one give the
+    same files, even between releases, when the version number alone can't tell (a newer Pillow,
+    say, can write a JPEG differently)."""
+    from importlib.metadata import PackageNotFoundError, version
     root = Path(__file__).resolve().parent
     h = hashlib.sha256()
     for p in sorted(root.rglob('*.py')):
         h.update(p.relative_to(root).as_posix().encode() + b'\0' + p.read_bytes())
+    for name in IMAGE_LIBRARIES:
+        try:
+            h.update(f'{name}=={version(name)}\0'.encode())
+        except PackageNotFoundError:
+            pass
     return h.hexdigest()[:16]
 
 

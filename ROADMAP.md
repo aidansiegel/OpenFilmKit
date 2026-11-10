@@ -25,7 +25,7 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 | M4 | Scanner color profiling (IT8 target, ArgyllCMS) | Not started; needs an IT8 transparency target to finish. |
 | M5 | Cleanup: dust, fibers, holder edges, red eye, scratches | Done: `clean`, and `clean --scratches` (trained models, opt-in). |
 | M6 | Packaging: Homebrew tap for macOS and Linux | Done: `brew install` tested on macOS (arm64) and Fedora (aarch64). |
-| M7 | Terminal UI (Textual) | Not started. |
+| M7 | Terminal UI (Textual) | In progress: `openfilmkit ui` browses rolls with previews (before/after, fixes marked), recipes, cleaning (here, on a host, into a queue) and the queue. Next: a scan screen, after the first real scanner runs. |
 | M8 | First release | 0.1.0, an early release ahead of M4 and M7, so the kit can be installed and tried. |
 | M9 | Remote processing: run conversion and cleanup on another machine, or queue jobs for several | Done for `clean` in 0.6.0: `clean --on HOST` and a queue several workers take jobs from (`clean --queue`, `openfilmkit worker`), on job packages with stage checkpoints, so stopped work resumes to the same result on any machine. Next: `convert` jobs. |
 

@@ -64,6 +64,26 @@ recipe beside it that says exactly how it was made.
     saved stages live in `~/.cache/openfilmkit/checkpoints` (or `$OPENFILMKIT_CACHE`) until the
     photo is done, and are cleared after two weeks if it never is.
 
+### The terminal UI
+
+`openfilmkit ui` (or `openfilmkit ui ~/Scans`) shows your rolls, or any folder of photos: each
+frame's master, conversions and cleaned copies, what still needs doing, the recipe of the selected
+copy in plain words, a preview, and the queue and its workers if one is set up.
+
+- `b` flips the preview between after (the cleaned copy) and before (the original, cropped the
+  same way), in place, so small fixes stand out; `B` shows them side by side; `ctrl+shift+b` side
+  by side with every fixed pixel marked in red (`ctrl+b` too, for terminals that can't tell them
+  apart).
+- `space` opens the full size in Quick Look (macOS) or the default viewer.
+- `m` marks frames (`a` marks every frame that needs cleaning) and `c` cleans them, with the
+  options as checkboxes: here, `--on` a host, or into a queue. `C` collects what the queue has
+  finished.
+
+Previews are drawn in the window as well as the terminal allows: in real pixels in Ghostty, Kitty
+and WezTerm (and Sixel terminals such as iTerm2 and foot), as colored blocks in Terminal.app or a
+plain SSH session. It works over SSH too. With pip, the UI is the `ui` extra:
+`pip install "openfilmkit[ui]"`. Scanning from the UI comes after the first real scanner runs.
+
 ### Files you get
 
 | File | From | What it is |

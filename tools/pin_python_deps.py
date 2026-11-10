@@ -15,8 +15,13 @@ import sys
 import urllib.request
 from pathlib import Path
 
-PACKAGES = {'numpy': '2.4.2', 'pillow': '12.0.0', 'tifffile': '2026.10.15',
-            'imagecodecs': '2026.10.10', 'opencv-python-headless': '4.14.0.94', 'setuptools': None}
+PACKAGES = {'numpy': '2.4.2', 'pillow': '12.3.0', 'tifffile': '2026.10.15',
+            'imagecodecs': '2026.10.10', 'opencv-python-headless': '4.14.0.94', 'setuptools': None,
+            # the terminal UI (the ui extra): Textual, textual-image (which needs Pillow >= 12.1) and
+            # everything they bring
+            'textual': '8.2.8', 'textual-image': '0.14.2', 'rich': '15.0.0', 'pygments': '2.21.0',
+            'markdown-it-py': '4.2.0', 'linkify-it-py': '2.2.0', 'mdit-py-plugins': '0.6.1', 'mdurl': '0.1.2',
+            'platformdirs': '4.14.5', 'typing-extensions': '4.16.0'}
 PYTHON = '314'   # the formula's python@3.14
 PLATFORMS = {'macOS arm64': r'macosx_\d+_\d+_(arm64|universal2)',
              'macOS x86_64': r'macosx_\d+_\d+_(x86_64|universal2)',

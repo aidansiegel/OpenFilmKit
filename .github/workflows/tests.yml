@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install ".[clean]"
+      - run: python -m pip install ".[clean,ui]"
       # The scratch models (about 100 MB), so the scratch-pass tests run too; cached between runs.
       - uses: actions/cache@v4
         with:

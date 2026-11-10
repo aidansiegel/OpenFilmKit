@@ -394,6 +394,19 @@ def cmd_queue(args, out):
     return 0
 
 
+def cmd_ui(args, out):
+    try:
+        from .ui import app
+    except ImportError as e:
+        raise Fail(f'the UI needs Textual and textual-image ({e.name} is missing): '
+                   'pip install "openfilmkit[ui]"')
+    folder = Path(args.folder).expanduser()
+    if not folder.is_dir():
+        raise Fail(f'{folder} is not a folder')
+    app.run(folder)
+    return 0
+
+
 def cmd_worker(args, out):
     from . import queues
     import signal
@@ -608,6 +621,8 @@ def parser():
                       help='bring finished jobs back beside their originals and clear them from the queue')
     s.add_argument('name', nargs='?', help='the queue (default: the only one in hosts.toml)')
     s.add_argument('--to', metavar='DIR', help='folder to copy into instead')
+    s = sub.add_parser('ui', help='the terminal UI: rolls, frames, previews, the queue')
+    s.add_argument('folder', nargs='?', default='.', help='a roll, a folder of rolls, or a folder of photos')
     s = sub.add_parser('worker', parents=[common], help='take jobs from a queue and do them, one at a time')
     s.add_argument('--queue', metavar='HOST:PATH', help='the queue folder (default: [worker] in hosts.toml)')
     s.add_argument('--drop', metavar='HOST:PATH', help="this worker's drop folder (default: QUEUE/drop/NAME)")
@@ -657,7 +672,7 @@ def cmd_models(args, out):
 COMMANDS = {'doctor': cmd_doctor, 'scanners': cmd_scanners, 'options': cmd_options,
             'scan': cmd_scan, 'stocks': cmd_stocks, 'profiles': cmd_profiles,
             'convert': cmd_convert, 'clean': cmd_clean, 'models': cmd_models, 'job': cmd_job,
-            'queue': cmd_queue, 'worker': cmd_worker}
+            'queue': cmd_queue, 'worker': cmd_worker, 'ui': cmd_ui}
 
 
 def _pipe_error(e):

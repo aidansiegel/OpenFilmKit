@@ -48,6 +48,8 @@ class Queue(unittest.TestCase):
         self.env = mock.patch.dict(os.environ, {'OPENFILMKIT_CONFIG': str(self.root / 'config'),
                                                 'OPENFILMKIT_CACHE': str(self.root / 'cache')})
         self.env.start()
+        self.spare = mock.patch.object(queues, 'SPARE', 0)   # however full this machine's disk is
+        self.spare.start()
         (self.root / 'photos').mkdir()
         self.photos = []
         for n, seed in ((1, 3), (2, 5)):
@@ -60,6 +62,7 @@ class Queue(unittest.TestCase):
         self.q = queues.queue_settings('home')
 
     def tearDown(self):
+        self.spare.stop()
         self.env.stop()
         self.temp.cleanup()
 
@@ -116,6 +119,13 @@ class Queue(unittest.TestCase):
             jid = w.once()
         self.assertGreater(beats.count(jid), 1)                             # claimed, then renewed
         self.assertEqual([r['state'] for r in queues.status(self.q)['jobs'] if r['id'] == jid], ['done'])
+
+    def test_a_batch_that_wouldnt_fit_on_the_queues_machine_is_refused(self):
+        with mock.patch.object(queues, '_free_bytes', lambda q: 1000):
+            code, err = self.ofk('clean', *map(str, self.photos), '--no-faces', '--queue', 'home')
+        self.assertNotEqual(code, 0)
+        self.assertIn('queue fewer at a time', err['error'])
+        self.assertFalse((self.queue / 'jobs').exists() and any((self.queue / 'jobs').iterdir()))
 
     def test_the_same_photo_in_two_folders_comes_back_to_both(self):
         twin = self.root / 'elsewhere' / 'twin.png'
