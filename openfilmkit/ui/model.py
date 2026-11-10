@@ -200,18 +200,51 @@ def _full(path):
         return np.asarray(im.convert('RGB'))
 
 
-def preview_image(path, side=1200):
-    """A Pillow image of `path` for showing in the terminal, at most `side` px (16-bit TIFFs too)."""
+def zoomed(z, center):
+    """The part of a picture shown at zoom `z` (1 = all of it) around `center` (fractions across
+    and down): (left, top, right, bottom) as fractions, kept inside the picture. None at zoom 1."""
+    if z <= 1:
+        return None
+    half = 0.5 / z
+    cx = min(max(center[0], half), 1 - half)
+    cy = min(max(center[1], half), 1 - half)
+    return (cx - half, cy - half, cx + half, cy + half)
+
+
+def _crop(a, region):
+    """Part of an image array: `region` as fractions (see zoomed()), at least a pixel."""
+    if not region:
+        return a
+    h, w = a.shape[:2]
+    l, t = int(region[0] * w), int(region[1] * h)
+    return a[t:max(t + 1, round(region[3] * h)), l:max(l + 1, round(region[2] * w))]
+
+
+def _single(im):
+    im.info['panels'] = [(0.0, 1.0, 0.0, 1.0)]
+    return im
+
+
+def preview_image(path, side=1200, region=None):
+    """A Pillow image of `path` for showing in the terminal, at most `side` px (16-bit TIFFs too);
+    with `region`, only that part of it (see zoomed())."""
     from PIL import Image
     path = Path(path)
-    if path.suffix.lower() in ('.tif', '.tiff'):
-        im = Image.fromarray(_full(path))
+    if region or path.suffix.lower() in ('.tif', '.tiff'):
+        im = Image.fromarray(_crop(_full(path), region))
     else:
         im = Image.open(path)
         im.draft('RGB', (side, side))   # JPEGs decode straight at a smaller size
         im = im.convert('RGB')
     im.thumbnail((side, side))
-    return im
+    return _single(im)
+
+
+def size_of(path):
+    """(width, height) of an image, from its header."""
+    from PIL import Image
+    with Image.open(path) as im:
+        return im.size
 
 
 class NotComparable(Exception):
@@ -232,42 +265,48 @@ def _original_like(source, cleaned):
     return a
 
 
-def before_image(source, cleaned, side=1200):
+def before_image(source, cleaned, side=1200, region=None):
     """The original as the cleaned copy shows it (cropped the same way), so flipping between the
     two shows only what the cleaning changed. A straightened copy can't be matched: then the
     whole original."""
     from PIL import Image
     try:
-        im = Image.fromarray(_original_like(source, cleaned))
+        im = Image.fromarray(_crop(_original_like(source, cleaned), region))
     except NotComparable:
-        return preview_image(source, side)
+        return preview_image(source, side, region)
     im.thumbnail((side, side))
-    return im
+    return _single(im)
 
 
-def side_by_side(source, cleaned, side=1200, gap=8, fixes=False):
+def side_by_side(source, cleaned, side=1200, gap=8, fixes=False, region=None):
     """Before and after next to each other in one image: (image, pixels changed or None). With
-    `fixes`, the after side has every changed pixel marked in red (see changes())."""
+    `fixes`, the after side has every changed pixel marked in red (see changes()). The image's
+    info['panels'] says where each side is, as fractions (left, right, top, bottom)."""
     from PIL import Image
-    a = before_image(source, cleaned, side)
-    b, n = changes(source, cleaned, side) if fixes else (preview_image(cleaned, side), None)
+    a = before_image(source, cleaned, side, region)
+    b, n = changes(source, cleaned, side, region=region) if fixes else (preview_image(cleaned, side, region), None)
     h = max(a.height, b.height)
-    out = Image.new('RGB', (a.width + gap + b.width, h), (24, 24, 24))
+    width = a.width + gap + b.width
+    out = Image.new('RGB', (width, h), (24, 24, 24))
     out.paste(a, (0, (h - a.height) // 2))
     out.paste(b, (a.width + gap, (h - b.height) // 2))
+    out.info['panels'] = [(0.0, a.width / width, (h - a.height) / 2 / h, (h + a.height) / 2 / h),
+                          ((a.width + gap) / width, 1.0, (h - b.height) / 2 / h, (h + b.height) / 2 / h)]
     return out, n
 
 
-def changes(source, cleaned, side=1200, level=8, band=1024):
+def changes(source, cleaned, side=1200, level=8, band=1024, region=None):
     """The cleaned copy with every pixel that differs from the original (by more than `level`, so
     JPEG noise doesn't count) marked in red: (Pillow image, pixels changed). Worked out at full
-    size and shrunk keeping any change in a block, so a single filled speck still shows."""
+    size and shrunk keeping any change in a block, so a single filled speck still shows. With
+    `region`, only that part (and the pixels changed in it)."""
     import numpy as np
     from PIL import Image
     a, b = _original_like(source, cleaned), _full(cleaned)
     if a.shape != b.shape:
         raise NotComparable(f'the original ({a.shape[1]}x{a.shape[0]}) and the cleaned copy '
                             f'({b.shape[1]}x{b.shape[0]}) are different sizes')
+    a, b = _crop(a, region), _crop(b, region)
     h, w = b.shape[:2]
     f = max(1, -(-max(h, w) // side))         # shrink factor, rounded up
     sh, sw = -(-h // f), -(-w // f)
@@ -288,7 +327,49 @@ def changes(source, cleaned, side=1200, level=8, band=1024):
     grown[:, 1:] |= marks[:, :-1]
     grown[:, :-1] |= marks[:, 1:]
     small[grown] = (230, 30, 30)
-    return Image.fromarray(small), changed
+    return _single(Image.fromarray(small)), changed
+
+
+def default_radius(size):
+    """The radius clean gives a spot when none is chosen: 0.4 % of the short side."""
+    return max(2, round(min(size) * 0.004))
+
+
+def draw_spots(im, spots, size, region=None):
+    """Rings on a preview where spots are marked: `spots` [(x, y, r)] in pixels of a picture of
+    `size`, drawn on every panel of `im` (see side_by_side()) showing `region` of it."""
+    from PIL import ImageDraw
+    if not spots:
+        return im
+    im = im.copy()
+    pen = ImageDraw.Draw(im)
+    l, t, r, b = region or (0, 0, 1, 1)
+    for x0, x1, y0, y1 in im.info.get('panels', [(0, 1, 0, 1)]):
+        pw, ph = (x1 - x0) * im.width, (y1 - y0) * im.height
+        for x, y, rad in spots:
+            if not (l <= x / size[0] <= r and t <= y / size[1] <= b):
+                continue                       # outside the part shown
+            cx = x0 * im.width + (x / size[0] - l) / (r - l) * pw
+            cy = y0 * im.height + (y / size[1] - t) / (b - t) * ph
+            rr = max(3, rad / size[0] / (r - l) * pw)
+            pen.ellipse((cx - rr, cy - rr, cx + rr, cy + rr), outline=(255, 210, 0), width=2)
+    return im
+
+
+def clean_args(options):
+    """openfilmkit clean arguments that repeat a recipe's options (see clean.settings()), so a new
+    copy is made the same way: spots marked on the old one then land in the same places."""
+    args = []
+    for key, off in (('crop', '--no-crop'), ('dust', '--no-dust'), ('protect_faces', '--no-faces')):
+        if options.get(key) is False:
+            args.append(off)
+    for key in ('color', 'red_eye', 'scratches', 'spare_long_lines'):
+        if options.get(key):
+            args.append('--' + key.replace('_', '-'))
+    for key in ('straighten', 'lift_shadows'):
+        if options.get(key) is not None:
+            args += ['--' + key.replace('_', '-'), str(options[key])]
+    return args
 
 
 def screen_here():

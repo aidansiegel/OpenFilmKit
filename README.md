@@ -74,14 +74,23 @@ copy in plain words, a preview, and the queue and its workers if one is set up.
   same way), in place, so small fixes stand out; `B` shows them side by side; `ctrl+shift+b` side
   by side with every fixed pixel marked in red (`ctrl+b` too, for terminals that can't tell them
   apart).
+- `z` zooms in (up to ×32) and `Z` back out; a click on the preview zooms in where you clicked,
+  `h` `j` `k` `l` (or shift and the arrows) move around, and `escape` shows the whole picture again.
+  Every view zooms, the red fixes too, worked out at full size for the part shown.
+- `s` marks spots the cleaning missed: click each one on the after picture (zoomed in, for
+  precision) and a yellow ring shows where; click a ring to unmark it, `[` and `]` resize the last
+  one. `c` then makes a new copy with the same options as the one you marked, filling those spots
+  too (`clean --spot`).
 - `space` opens the full size in Quick Look (macOS) or the default viewer.
-- `m` marks frames (`a` marks every frame that needs cleaning) and `c` cleans them, with the
-  options as checkboxes: here, `--on` a host, or into a queue. `C` collects what the queue has
-  finished.
+- `m` marks frames (`a` marks every frame that needs cleaning). `v` converts them from their scan
+  masters (a JPEG viewing copy, or a 16-bit TIFF at full resolution), and `c` cleans them, with the
+  options as checkboxes: here, `--on` a host, or into a queue. Commands run one at a time, with
+  their output in a log at the bottom. `C` collects what the queue has finished.
 
 Previews are drawn in the window as well as the terminal allows: in real pixels in Ghostty, Kitty
 and WezTerm (and Sixel terminals such as iTerm2 and foot), as colored blocks in Terminal.app or a
-plain SSH session. It works over SSH too. With pip, the UI is the `ui` extra:
+plain SSH session; the first blocky preview says so, and points to `space` for the full size where
+there's a screen to open it on. It works over SSH too. With pip, the UI is the `ui` extra:
 `pip install "openfilmkit[ui]"`. Scanning from the UI comes after the first real scanner runs.
 
 ### Files you get

@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -118,6 +119,37 @@ class Model(unittest.TestCase):
         with self.assertRaises(model.NotComparable):
             model.changes(d / 'crop-v1.png', d / 'crop-v1-clean-v1.png')
 
+    def test_a_zoomed_preview_shows_that_part_at_full_size(self):
+        d = self.roll / 'derived'
+        base = np.zeros((400, 600, 3), np.uint8)
+        base[300:, 450:] = 255                                 # the bottom-right corner is white
+        Image.fromarray(base).save(d / 'zoom-v1.png')
+        after = base.copy()
+        after[350, 520] = 0                                    # one speck filled, in that corner
+        Image.fromarray(after).save(d / 'zoom-v1-clean-v1.png')
+        self.assertIsNone(model.zoomed(1, (0.9, 0.9)))
+        region = model.zoomed(4, (0.99, 0.99))                 # kept inside the picture
+        self.assertEqual(region, (0.75, 0.75, 1.0, 1.0))
+        part = model.preview_image(d / 'zoom-v1.png', region=region)
+        self.assertEqual(part.size, (150, 100))
+        self.assertTrue(np.all(np.asarray(part) == 255))
+        marked, n = model.changes(d / 'zoom-v1.png', d / 'zoom-v1-clean-v1.png', region=region)
+        self.assertEqual((marked.size, n), ((150, 100), 1))
+        both, _ = model.side_by_side(d / 'zoom-v1.png', d / 'zoom-v1-clean-v1.png', region=region)
+        (l0, r0, *_), (l1, r1, *_) = both.info['panels']
+        self.assertEqual((l0, round(r0, 3), round(l1, 3), r1), (0.0, round(150 / 308, 3), round(158 / 308, 3), 1.0))
+
+    def test_spots_are_drawn_where_they_are_and_clean_repeats_a_recipe(self):
+        im = model.preview_image(self.roll / 'derived' / 'frame-01-v1.png')   # 60x40
+        ringed = np.asarray(model.draw_spots(im, [(30, 20, 5)], (60, 40)))
+        self.assertTrue(np.all(ringed[20, 25] == (255, 210, 0)) and not np.all(ringed[20, 30] == (255, 210, 0)))
+        outside = np.asarray(model.draw_spots(im, [(5, 5, 2)], (60, 40), region=(0.5, 0.5, 1, 1)))
+        self.assertTrue(np.array_equal(outside, np.asarray(im)))
+        self.assertEqual(model.clean_args({'crop': False, 'dust': True, 'protect_faces': True, 'color': True,
+                                           'straighten': 1.5, 'lift_shadows': None, 'red_eye': False,
+                                           'scratches': True, 'spare_long_lines': False}),
+                         ['--no-crop', '--color', '--scratches', '--straighten', '1.5'])
+
     def test_a_viewer_isnt_opened_without_a_screen(self):
         with mock.patch.object(model, 'screen_here', lambda: False):
             with self.assertRaisesRegex(OSError, 'no screen'):
@@ -170,7 +202,7 @@ class App(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((await self.caption_after(app, pilot, 'b')).startswith('after:'))
             self.assertIn('|  after:', await self.caption_after(app, pilot, 'B'))
             self.assertTrue((await self.caption_after(app, pilot, 'B')).startswith('after:'))   # off again
-            self.assertIn('pixels changed noticeably', await self.caption_after(app, pilot, 'ctrl+shift+b'))
+            self.assertIn('pixels changed, in red', await self.caption_after(app, pilot, 'ctrl+shift+b'))
             self.assertTrue((await self.caption_after(app, pilot, 'ctrl+b')).startswith('after:'))   # any terminal
 
     async def test_a_flurry_of_presses_works_out_one_preview(self):
@@ -179,7 +211,7 @@ class App(unittest.IsolatedAsyncioTestCase):
         async with app.run_test(size=(120, 40)) as pilot:
             await self.caption_after(app, pilot)
             real = app.make_preview
-            app.make_preview = lambda item, view: made.append(view) or real(item, view)
+            app.make_preview = lambda item, view, region: made.append(view) or real(item, view, region)
             caption = await self.caption_after(app, pilot, 'b', 'b', 'b', 'b', 'b')   # ends on before
             self.assertLessEqual(len(made), 1)
             self.assertTrue(caption.startswith('before:'))
@@ -188,7 +220,7 @@ class App(unittest.IsolatedAsyncioTestCase):
         app = ui_app.OpenFilmKitApp(self.roll)
         ran = []
         async with app.run_test(size=(120, 40)) as pilot:
-            app.run_openfilmkit = ran.append
+            app.run_command = lambda argv, about, doing: ran.append(argv)
             await pilot.press('a')                                   # every frame that needs cleaning
             self.assertEqual(self.cells(app, 0), [' ', '✓', ' ', ' '])
             await pilot.press('c')
@@ -197,6 +229,88 @@ class App(unittest.IsolatedAsyncioTestCase):
             await pilot.click('#go')
             await pilot.pause()
         self.assertEqual(ran, [['clean', str(self.roll / 'derived' / 'frame-02-v1.jpg'), '--scratches', '--on', 'portable']])
+
+    async def test_a_click_zooms_in_there_and_escape_shows_it_all(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await self.caption_after(app, pilot)
+            await pilot.click('#preview', offset=(0, 0))       # the top-left corner
+            await pilot.pause(0.4)
+            await app.workers.wait_for_complete()
+            self.assertEqual(app.zoom, 2)
+            self.assertEqual(app.region(), (0, 0, 0.5, 0.5))
+            self.assertIn('×4', await self.caption_after(app, pilot, 'z'))
+            self.assertEqual(app.zoom, 4)
+            await pilot.press('l', 'l')                        # a quarter of what's shown, twice
+            self.assertAlmostEqual(app.center[0], 0.25 + 2 * 0.0625)    # from the corner's center at ×2
+            self.assertNotIn('×', await self.caption_after(app, pilot, 'escape'))
+            self.assertEqual(app.zoom, 1)
+
+    async def test_spots_are_marked_by_clicking_and_cleaned_with_the_same_options(self):
+        recipe = self.roll / 'derived' / 'frame-01-v1-clean-v1.png.json'
+        rec = json.loads(recipe.read_text())
+        rec['options'] = {'crop': True, 'dust': True, 'protect_faces': True, 'color': False, 'straighten': None,
+                          'lift_shadows': None, 'red_eye': False, 'scratches': True, 'spare_long_lines': False}
+        recipe.write_text(json.dumps(rec))
+        app = ui_app.OpenFilmKitApp(self.roll)
+        ran = []
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.run_command = lambda argv, about, doing: ran.append(argv)
+            await self.caption_after(app, pilot, 's')
+            app.preview_clicked(0.5, 0.5)                      # the middle of the 60x40 cleaned copy
+            app.preview_clicked(0.1, 0.1)
+            app.preview_clicked(0.1, 0.1)                      # again: unmarked
+            self.assertEqual(app.spots, {str(self.roll / 'derived' / 'frame-01-v1-clean-v1.png'): [[30, 20, 2]]})
+            self.assertEqual(self.cells(app, 5)[0], 'cleaned · 1 spot')
+            await pilot.press('c')
+            self.assertIn('same places', str(app.screen.query_one('#fixed').render()))
+            await pilot.click('#go')
+            await pilot.pause()
+        self.assertEqual(ran, [['clean', str(self.roll / 'derived' / 'frame-01-v1.png'), '--scratches',
+                                '--spot', '30,20,2']])
+
+    async def test_converting_a_frame_from_its_master(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        ran = []
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.run_command = lambda argv, about, doing: ran.append((argv, doing))
+            await pilot.press('down', 'down', 'down', 'v')
+            await pilot.click('#tiff')
+            await pilot.click('#go')
+            await pilot.pause()
+            self.assertEqual(self.cells(app, 5)[3], 'waiting')
+        self.assertEqual(ran, [(['convert', str(self.roll / 'masters' / 'frame-03.tif'), '--tiff'], 'converting…')])
+
+    async def test_commands_run_one_at_a_time(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        async with app.run_test(size=(120, 40)) as pilot:
+            started = []
+
+            class Proc:
+                def __init__(self, argv, **kw):
+                    started.append((argv[-1], app.one_at_a_time.locked()))
+                    self.stdout, self.returncode = iter(['working']), 0
+
+                def wait(self):
+                    time.sleep(0.2)
+
+            with mock.patch.object(ui_app.subprocess, 'Popen', Proc):
+                app.start_command(['models', 'one'], [], 'x')
+                app.start_command(['models', 'two'], [], 'x')
+                await pilot.pause(0.1)
+                self.assertEqual(len(started), 1)              # the second waits for the first
+                await app.workers.wait_for_complete()
+            self.assertEqual([a for a, _ in started], ['one', 'two'])
+
+    async def test_a_blocky_preview_says_so_once(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        with mock.patch.object(ui_app, 'BLOCKY', True), mock.patch.object(app, 'notify') as notify:
+            async with app.run_test(size=(120, 40)) as pilot:
+                await self.caption_after(app, pilot)
+                await self.caption_after(app, pilot, 'down')
+        said = [c for c in notify.call_args_list if c.kwargs.get('title') == 'Low-resolution preview']
+        self.assertEqual(len(said), 1)
+        self.assertIn('low-resolution guide', said[0].args[0])
 
     async def test_queue_states_show_against_their_frames(self):
         app = ui_app.OpenFilmKitApp(self.roll)
