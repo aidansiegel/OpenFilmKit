@@ -56,11 +56,14 @@ def build():
     """A fingerprint of this OpenFilmKit's code (its Python files) and of the versions of the
     libraries that read, compute and write its pixels: two installs with the same one give the
     same files, even between releases, when the version number alone can't tell (a newer Pillow,
-    say, can write a JPEG differently)."""
+    say, can write a JPEG differently). The terminal UI's code is left out: it never touches the
+    pixels, so changing it shouldn't turn workers away from jobs."""
     from importlib.metadata import PackageNotFoundError, version
     root = Path(__file__).resolve().parent
     h = hashlib.sha256()
     for p in sorted(root.rglob('*.py')):
+        if p.relative_to(root).parts[0] == 'ui':
+            continue
         h.update(p.relative_to(root).as_posix().encode() + b'\0' + p.read_bytes())
     for name in IMAGE_LIBRARIES:
         try:
