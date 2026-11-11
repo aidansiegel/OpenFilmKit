@@ -23,6 +23,8 @@ from textual.screen import ModalScreen
 from textual.widgets import (Button, Checkbox, DataTable, Footer, Header, Label, ListItem, ListView, RadioButton,
                              RadioSet, RichLog, Static)
 from textual_image.renderable.halfcell import Image as Halfcell
+from textual_image.renderable.tgp import Image as TGP
+from textual_image.renderable.tgp import _send_tgp_message
 from textual_image.renderable.unicode import Image as Unicode
 from textual_image.widget import Image
 
@@ -123,7 +125,20 @@ class ConvertDialog(ModalScreen):
         self.dismiss(None)
 
 
-class Preview(Image, Renderable=Image._Renderable):
+class FreedTGP(TGP):
+    """A picture in Ghostty, Kitty or WezTerm (the Terminal Graphics Protocol), freed in the terminal
+    when it's replaced. textual-image (0.14.3) deletes one with a=d,I=<id>, which in the protocol takes
+    every picture off the screen but keeps them all, so the terminal kept each preview ever drawn: a
+    Ghostty tab grew by gigabytes in an evening. d=I frees the picture with that i= ID; q=2 keeps any
+    reply out of what Textual reads as keys."""
+
+    def cleanup(self):
+        if self.terminal_image_id:
+            _send_tgp_message(a='d', d='I', i=self.terminal_image_id, q=2)
+            self.terminal_image_id = None
+
+
+class Preview(Image, Renderable=FreedTGP if Image._Renderable is TGP else Image._Renderable):
     """The preview, telling the app where on the picture it was clicked."""
 
     def on_click(self, event: events.Click):
@@ -131,6 +146,10 @@ class Preview(Image, Renderable=Image._Renderable):
         size = self.content_size
         if offset is not None and size.width and size.height:
             self.app.preview_clicked((offset.x + 0.5) / size.width, (offset.y + 0.5) / size.height)
+
+    def on_unmount(self):
+        if self._renderable:   # the last preview too, so quitting leaves nothing in the terminal
+            self._renderable.cleanup()
 
 
 class HelpScreen(ModalScreen):
