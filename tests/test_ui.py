@@ -363,26 +363,29 @@ class App(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(self.cells(app, 5)[1], 'running on portable')
 
-    async def test_each_preview_is_freed_in_the_terminal_when_replaced_and_on_quitting(self):
-        """Ghostty, Kitty and WezTerm keep a picture until told to free it (d=I with its i= ID)."""
+    async def test_each_preview_replaces_the_last_in_the_terminal_and_is_freed_on_quitting(self):
+        """Ghostty, Kitty and WezTerm keep a picture until it's replaced (sent again under its i= ID) or
+        freed (d=I); Ghostty 1.3.1 keeps one freed while another is on screen, so each preview replaces
+        the last."""
         sent = []
 
         def send(payload=None, **kw):
             sent.append(kw)
         app = ui_app.OpenFilmKitApp(self.roll)
-        with mock.patch.object(ui_app.Preview, '_Renderable', ui_app.FreedTGP), \
+        with mock.patch.object(ui_app.Preview, '_Renderable', ui_app.InPlaceTGP), \
                 mock.patch.object(ui_app, '_send_tgp_message', send), \
                 mock.patch('textual_image.renderable.tgp._send_tgp_message', send):
             async with app.run_test(size=(120, 40)) as pilot:
                 await self.caption_after(app, pilot)
                 await self.caption_after(app, pilot, 'b')
                 await self.caption_after(app, pilot, 'b')
-                drawn = [k['i'] for k in sent if k.get('f')]
-                freed = [k['i'] for k in sent if k.get('a') == 'd' and k.get('d') == 'I']
-                self.assertGreaterEqual(len(set(drawn)), 3)
-                self.assertEqual(set(freed), set(drawn) - {drawn[-1]})   # all but the one showing
-        self.assertEqual({k['i'] for k in sent if k.get('a') == 'd'}, set(drawn))
-        self.assertTrue(all(k.get('d') == 'I' for k in sent if k.get('a') == 'd'))
+                one_id = app.query_one('#preview').terminal_id
+                pictures = [k for k in sent if k.get('f')]
+                self.assertGreaterEqual(len(pictures), 3)
+                self.assertEqual({k['i'] for k in pictures}, {one_id})
+                self.assertEqual([k for k in sent if k.get('a') == 'd' and k.get('d') != 'i'], [])
+        freed = [k for k in sent if k.get('a') == 'd' and k.get('d') == 'I']
+        self.assertEqual([k['i'] for k in freed], [one_id])
 
     async def test_help_opens_and_closes(self):
         app = ui_app.OpenFilmKitApp(self.roll)

@@ -125,21 +125,42 @@ class ConvertDialog(ModalScreen):
         self.dismiss(None)
 
 
-class FreedTGP(TGP):
-    """A picture in Ghostty, Kitty or WezTerm (the Terminal Graphics Protocol), freed in the terminal
-    when it's replaced. textual-image (0.14.3) deletes one with a=d,I=<id>, which in the protocol takes
-    every picture off the screen but keeps them all, so the terminal kept each preview ever drawn: a
-    Ghostty tab grew by gigabytes in an evening. d=I frees the picture with that i= ID; q=2 keeps any
-    reply out of what Textual reads as keys."""
+class InPlaceTGP(TGP):
+    """A picture in Ghostty, Kitty or WezTerm (the Terminal Graphics Protocol), sent under the preview's
+    one ID, so each new picture replaces the last in the terminal (the protocol deletes an image when
+    data comes for its ID again). textual-image (0.14.3) sends each under a new ID and deletes the old
+    with a=d,I=<id>, which takes pictures off the screen but keeps them all, so a Ghostty tab grew by
+    gigabytes in an evening. Freeing each one (d=I) isn't enough in Ghostty 1.3.1, which keeps a freed
+    picture unless a frame with no picture on screen follows. q=2 keeps any reply out of what Textual
+    reads as keys."""
+    terminal_id = None   # set by the preview
+
+    def _send_image_to_terminal(self, width, height):
+        self.terminal_image_id = self.terminal_id or next(TGP._image_id_counter)
+        data = self._image_data.scaled(width, height).to_base64()
+        while data:
+            chunk, data = data[:4096], data[4096:]
+            _send_tgp_message(i=self.terminal_image_id, m=1 if data else 0, f=100, payload=chunk, q=2)
 
     def cleanup(self):
+        """Take it off the screen (d=i: its placement), keeping the picture for the next to replace."""
         if self.terminal_image_id:
-            _send_tgp_message(a='d', d='I', i=self.terminal_image_id, q=2)
+            _send_tgp_message(a='d', d='i', i=self.terminal_image_id, q=2)
             self.terminal_image_id = None
 
 
-class Preview(Image, Renderable=FreedTGP if Image._Renderable is TGP else Image._Renderable):
+class Preview(Image, Renderable=InPlaceTGP if Image._Renderable is TGP else Image._Renderable):
     """The preview, telling the app where on the picture it was clicked."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.terminal_id = next(TGP._image_id_counter)
+
+    def render(self):
+        picture = super().render()
+        if isinstance(picture, InPlaceTGP):
+            picture.terminal_id = self.terminal_id
+        return picture
 
     def on_click(self, event: events.Click):
         offset = event.get_content_offset(self)
@@ -148,8 +169,8 @@ class Preview(Image, Renderable=FreedTGP if Image._Renderable is TGP else Image.
             self.app.preview_clicked((offset.x + 0.5) / size.width, (offset.y + 0.5) / size.height)
 
     def on_unmount(self):
-        if self._renderable:   # the last preview too, so quitting leaves nothing in the terminal
-            self._renderable.cleanup()
+        if issubclass(self._Renderable, InPlaceTGP):   # freed, so quitting leaves nothing in the terminal
+            _send_tgp_message(a='d', d='I', i=self.terminal_id, q=2)
 
 
 class HelpScreen(ModalScreen):
