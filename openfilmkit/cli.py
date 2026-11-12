@@ -379,7 +379,7 @@ def cmd_job(args, out):
             record = already or jobs.run(package, say=out.error)
         except jobs.JobError as e:
             out.error(f'openfilmkit: {package}: {e}')
-            records.append({'package': str(package), 'error': str(e)})
+            records.append({'package': str(package), 'error': str(e), 'always_fails': isinstance(e, jobs.AlwaysFails)})
             continue
         out.say(f"{Path(package).name[:12]}: {'already done' if already else 'done'} → {Path(record['output']).name}")
         records.append(record)
@@ -398,6 +398,15 @@ def cmd_queue(args, out):
                 out.say('Nothing finished to collect.')
             out.result(records)
             return 0 if all('error' not in r for r in records) else 1
+        if args.queue_command == 'retry':
+            retried = queues.retry(q, args.job, say=out.say)
+            if not retried:
+                out.say('No failed jobs.')
+            out.result({'retried': retried})
+            return 0
+        if args.queue_command == 'remove':
+            out.result({'removed': queues.remove(q, args.job, say=out.say)})
+            return 0
         info = queues.status(q)
     except queues.QueueError as e:
         raise Fail(str(e))
@@ -405,7 +414,11 @@ def cmd_queue(args, out):
     for row in info['jobs']:
         where = f" on {row['worker']}" if row.get('worker') else ''
         extra = f": {row['error']}" if row.get('error') else ''
+        if row['state'] == 'failed' and not row['final']:
+            extra += f" (try {row['tries']} of {queues.TRIES}; it will try again)"
         out.say(f"  {row['id'][:12]}  {row['state']}{where}  {Path(row['photo'] or '').name} → {row['output']}{extra}")
+    if any(row['state'] == 'failed' and row['final'] for row in info['jobs']):
+        out.say('  Failed jobs stay until `queue retry` (try them again) or `queue remove --job ID`.')
     for w in info['workers']:
         busy = f", running {w['running'][:12]}" if w.get('running') else ''
         out.say(f"  worker {w['name']}: {w.get('version')}, up to {w.get('memory_gb')} GB, "
@@ -648,6 +661,14 @@ def parser():
                       help='bring finished jobs back beside their originals and clear them from the queue')
     s.add_argument('name', nargs='?', help='the queue (default: the only one in hosts.toml)')
     s.add_argument('--to', metavar='DIR', help='folder to copy into instead')
+    s = qp.add_parser('retry', parents=[common], help='have the workers try failed jobs again')
+    s.add_argument('name', nargs='?', help='the queue (default: the only one in hosts.toml)')
+    s.add_argument('--job', action='append', metavar='ID',
+                   help='a failed job, by its ID or the start of it (repeatable; default: every failed job)')
+    s = qp.add_parser('remove', parents=[common], help='take jobs out of the queue, whatever their state')
+    s.add_argument('name', nargs='?', help='the queue (default: the only one in hosts.toml)')
+    s.add_argument('--job', action='append', metavar='ID', required=True,
+                   help='the job, by its ID or the start of it (repeatable)')
     s = sub.add_parser('ui', help='the terminal UI: rolls, frames, previews, the queue')
     s.add_argument('folder', nargs='?', default='.', help='a roll, a folder of rolls, or a folder of photos')
     s = sub.add_parser('worker', parents=[common], help='take jobs from a queue and do them, one at a time')

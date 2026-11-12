@@ -128,6 +128,24 @@ class Queue(unittest.TestCase):
         self.assertIn('queue fewer at a time', err['error'])
         self.assertFalse((self.queue / 'jobs').exists() and any((self.queue / 'jobs').iterdir()))
 
+    def test_a_job_is_offered_to_workers_only_once_its_photo_has_arrived(self):
+        # A package's job.json is what offers it to workers, and rsync sends it before the photo: a
+        # worker that looked during the upload fetched a job with no photo, failed it and left it.
+        real, partway = queues._rsync, []
+
+        def watched(ssh_command, *args, quiet=False):
+            ok = real(ssh_command, *args, quiet=quiet)
+            if args[-1] == f'{self.queue}/jobs/' and not partway:          # the upload's first pass is over
+                partway.append(sorted(p.name for p in (self.queue / 'jobs').rglob('*') if p.is_file()))
+                self.assertIsNone(self.worker('w1').once())                 # a worker looks: nothing for it yet
+            return ok
+        with mock.patch.object(queues, '_rsync', watched):
+            ids = self.queue_photos()
+        self.assertEqual(partway, [sorted(p.name for p in self.photos)])    # the photos, and no job.json
+        w = self.worker('w1')
+        self.assertEqual(sorted([w.once(), w.once()]), sorted(ids))
+        self.assertEqual(self.states(), ['done', 'done'])
+
     def test_the_same_photo_in_two_folders_comes_back_to_both(self):
         twin = self.root / 'elsewhere' / 'twin.png'
         twin.parent.mkdir()
@@ -139,6 +157,23 @@ class Queue(unittest.TestCase):
         self.assertEqual(sorted(r['output'] for r in recs),
                          sorted([str(self.photos[0].with_name('frame-01-v1-clean-v1.png')),
                                  str(twin.with_name('twin-clean-v1.png'))]))
+
+    def test_one_photo_queued_twice_with_other_options_comes_back_as_two_copies(self):
+        # Both jobs were named -clean-v1 when they were packed, and the second to be collected was
+        # refused ("a different file") on every collect after.
+        del self.photos[1:]
+        self.queue_photos()
+        self.queue_photos('--color')
+        w = self.worker('w1')
+        w.once(), w.once()
+        code, recs = self.ofk('queue', 'collect')
+        self.assertEqual(code, 0, recs)
+        self.assertEqual(sorted(Path(r['output']).name for r in recs),
+                         ['frame-01-v1-clean-v1.png', 'frame-01-v1-clean-v2.png'])
+        self.assertEqual(sorted(any(s['step'] == 'color' for s in r['steps']) for r in recs), [False, True])
+        for r in recs:
+            self.assertEqual(jobs.sha(r['output']), r['output_sha256'])
+        self.assertEqual(queues.status(self.q)['jobs'], [])
 
     def test_where_collecting_may_not_delete_a_workers_files_the_worker_clears_them(self):
         self.queue_photos()
@@ -348,17 +383,119 @@ class Queue(unittest.TestCase):
         self.assertFalse(out.exists())
         self.assertIn(jid, self.worker('w2').candidates(self.worker('w2').view()))
 
-    def test_a_failed_job_is_reported_and_not_retried_by_the_same_worker(self):
+    def test_a_job_that_cant_be_done_is_reported_and_not_retried_by_the_same_worker(self):
         self.queue_photos()
 
         def broken(package, beat, every):
-            raise jobs.JobError('out of film')
+            raise jobs.AlwaysFails('out of film')
         w1 = self.worker('w1', run=broken)
         jid = w1.once()
         rows = {r['id']: r for r in queues.status(self.q)['jobs']}
         self.assertEqual((rows[jid]['state'], rows[jid]['error']), ('failed', 'out of film'))
         self.assertNotIn(jid, w1.candidates(w1.view()))
+        later = self.worker('w1', now=lambda: time.time() + 30 * 86400)     # nor a month on
+        self.assertNotIn(jid, later.candidates(later.view()))
         self.assertIn(jid, self.worker('w2').candidates(self.worker('w2').view()))
+
+    def test_a_failure_that_may_pass_is_tried_again_after_a_wait(self):
+        # The memory cap killing the run, a download that dropped, a full disk: with one worker, a
+        # job that failed once stayed failed for good.
+        del self.photos[1:]
+        (jid,) = self.queue_photos()
+        clock = [time.time()]
+
+        def killed(package, beat, every):
+            raise jobs.JobError('job run ended with status -9')
+        w = self.worker('w1', run=killed, now=lambda: clock[0])
+        self.assertEqual(w.once(), jid)
+        (row,) = queues.status(self.q)['jobs']
+        self.assertEqual((row['state'], row['tries'], row['final']), ('failed', 1, False))
+        self.assertTrue((w.state / 'jobs' / jid / 'input').is_dir())       # its photo is kept for the next try
+        self.assertIsNone(w.once())                                         # which isn't at once
+        clock[0] += queues.RETRY[0] + 1
+        w.run = inproc
+        self.assertEqual(w.once(), jid)
+        self.assertEqual(self.states(), ['done'])
+
+    def test_a_job_that_keeps_failing_is_left_after_three_tries(self):
+        del self.photos[1:]
+        (jid,) = self.queue_photos()
+        clock = [time.time()]
+
+        def killed(package, beat, every):
+            raise jobs.JobError('job run ended with status -9')
+        w = self.worker('w1', run=killed, now=lambda: clock[0])
+        self.assertEqual(w.once(), jid)
+        clock[0] += queues.RETRY[0] + 1
+        self.assertEqual(w.once(), jid)                                     # the second try
+        clock[0] += queues.RETRY[0] + 1
+        self.assertIsNone(w.once())                                         # a longer wait before the third
+        clock[0] += queues.RETRY[1]
+        self.assertEqual(w.once(), jid)
+        (row,) = queues.status(self.q)['jobs']
+        self.assertEqual((row['state'], row['tries'], row['final']), ('failed', 3, True))
+        self.assertFalse((w.state / 'jobs' / jid).exists())                # not tried here again: its copy goes
+        clock[0] += 30 * 86400
+        self.assertIsNone(w.once())
+
+    def test_a_job_whose_process_dies_without_saying_why_is_tried_again_later(self):
+        del self.photos[1:]
+        self.queue_photos()
+        real = subprocess.Popen
+
+        def dies(argv, **kw):                                               # as when the memory cap kills it
+            if list(argv[1:3]) == ['-m', 'openfilmkit']:
+                argv = [sys.executable, '-c', 'raise SystemExit(9)']
+            return real(argv, **kw)
+        w = self.worker('w1', run=queues.run_in_subprocess)
+        with mock.patch.object(subprocess, 'Popen', dies):
+            w.once()
+        (row,) = queues.status(self.q)['jobs']
+        self.assertEqual((row['error'], row['final']), ('job run ended with status 9', False))
+
+    def test_queue_retry_sets_failures_aside_and_the_worker_starts_over(self):
+        # A failed job could only be freed by deleting the worker's files by hand on the queue's machine.
+        del self.photos[1:]
+        (jid,) = self.queue_photos()
+
+        def broken(package, beat, every):
+            raise jobs.AlwaysFails('out of film')
+        w = self.worker('w1', run=broken)
+        w.once()
+        self.assertIsNone(w.once())
+        self.assertEqual(self.ofk('queue', 'retry'), (0, {'retried': [jid]}))
+        self.assertEqual(self.states(), ['waiting'])
+        self.assertEqual(w.once(), jid)                                     # tried again, and failed again:
+        self.assertEqual(self.states(), ['failed'])                         # the new failure stands
+        self.assertEqual(self.ofk('queue', 'retry', '--job', jid[:12]), (0, {'retried': [jid]}))
+        w.run = inproc
+        self.assertEqual(w.once(), jid)
+        self.assertEqual(self.states(), ['done'])
+        self.assertEqual([p for p in (self.queue / 'drop' / 'w1' / 'failed').rglob('*') if p.is_file()], [])
+        self.assertFalse((w.mirror / 'failed' / jid).exists())
+        code, err = self.ofk('queue', 'retry', '--job', jid[:12])
+        self.assertNotEqual(code, 0)
+        self.assertIn('has not failed', err['error'])
+
+    def test_queue_remove_takes_a_job_out_of_the_queue(self):
+        self.queue_photos()
+
+        def broken(package, beat, every):
+            raise jobs.AlwaysFails('out of film')
+        w = self.worker('w1', run=broken)
+        failed = w.once()
+        code, err = self.ofk('queue', 'remove', '--job', 'no-such-job')
+        self.assertNotEqual(code, 0)
+        self.assertEqual(len(self.states()), 2)
+        self.assertEqual(self.ofk('queue', 'remove', '--job', failed[:12]), (0, {'removed': [failed]}))
+        self.assertFalse((self.queue / 'jobs' / failed).exists())
+        self.assertFalse((queues.outbox(self.q) / failed).exists())        # nor its photo's copy kept here
+        (row,) = queues.status(self.q)['jobs']
+        self.assertEqual(row['state'], 'waiting')
+        w.run = inproc
+        self.assertEqual(w.once(), row['id'])                               # the worker clears its own leftovers
+        self.assertEqual([p for p in (self.queue / 'drop' / 'w1' / 'failed').rglob('*') if p.is_file()], [])
+        self.assertFalse((w.mirror / 'failed' / failed).exists())
 
     def test_a_job_that_fails_in_its_own_process_says_why(self):
         bad = self.root / 'photos' / 'broken.png'
@@ -370,6 +507,7 @@ class Queue(unittest.TestCase):
         (row,) = queues.status(self.q)['jobs']
         self.assertEqual(row['state'], 'failed')
         self.assertIn('cannot read image', row['error'])
+        self.assertTrue(row['final'])                                       # the photo's own: no use trying again
         self.assertFalse((w.state / 'jobs' / jid).exists())               # not tried here again: its copy goes
 
     def test_a_worker_clears_its_own_copies_of_a_job_once_it_is_gone(self):

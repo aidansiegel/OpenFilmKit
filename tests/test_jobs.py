@@ -157,11 +157,27 @@ class Jobs(unittest.TestCase):
         self.assertEqual(jobs.sha(dest), record['output_sha256'])
         self.assertEqual(json.loads(Path(str(dest) + '.json').read_text())['output'], str(dest))
         self.assertEqual(jobs.collect(package)[0]['output'], str(dest))       # again: harmless
-        other = self.root / 'other'
-        other.mkdir()
-        (other / 'frame-v1-clean-v1.png').write_bytes(b'something else')
+        chosen = self.pack(output='best.png')
+        jobs.run(chosen)
+        (self.root / 'photos' / 'best.png').write_bytes(b'something else')
         with self.assertRaisesRegex(jobs.JobError, 'refusing'):
-            jobs.collect(package, other)
+            jobs.collect(chosen)
+
+    def test_a_numbered_copy_whose_number_was_taken_meanwhile_gets_the_next(self):
+        # The number is picked when the job is packed; by the time it's collected another copy
+        # (the same photo cleaned with other options, say) can have it.
+        package = self.pack()
+        jobs.run(package)
+        taken = self.root / 'photos' / 'frame-v1-clean-v1.png'
+        taken.write_bytes(b'something else')
+        (record,) = jobs.collect(package)
+        dest = self.root / 'photos' / 'frame-v1-clean-v2.png'
+        self.assertEqual(record['output'], str(dest))
+        self.assertEqual(jobs.sha(dest), record['output_sha256'])
+        self.assertEqual(json.loads(Path(str(dest) + '.json').read_text())['output'], str(dest))
+        self.assertEqual(taken.read_bytes(), b'something else')
+        self.assertEqual(jobs.collect(package)[0]['output'], str(dest))       # again: harmless, and no v3
+        self.assertFalse((self.root / 'photos' / 'frame-v1-clean-v3.png').exists())
 
     def test_a_roll_is_packed_and_run_from_the_command_line(self):
         r = self.root / 'roll-04'

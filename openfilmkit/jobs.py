@@ -28,6 +28,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import shutil
 import socket
 from pathlib import Path
@@ -41,6 +42,10 @@ CLEAN_OPTIONS = ('crop', 'dust', 'protect_faces', 'color', 'straighten', 'lift_s
 
 class JobError(Exception):
     pass
+
+
+class AlwaysFails(JobError):
+    """A job that can't be done however often it's tried (its photo can't be read, say)."""
 
 
 def sha(path):
@@ -296,17 +301,35 @@ def run(package, say=None):
         os.replace(Path(str(produced) + '.json'), Path(str(final) + '.json'))   # last: the job is done
         shutil.rmtree(package / 'work' / 'checkpoints', ignore_errors=True)
     except clean.CleanError as e:
-        raise JobError(str(e)) from e
+        # The photo or the options, so the same again next time; except a model that couldn't be
+        # fetched, which another try may get.
+        fetching = isinstance(e.__cause__, models.ModelError)
+        raise (JobError if fetching else AlwaysFails)(str(e)) from e
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return record
 
 
+NUMBERED = re.compile(r'(.*-clean-v)(\d+)')   # the names clean gives its copies (clean.default_output)
+
+
+def _free(dest, digest):
+    """`dest`, or where a different file has that name and it is one of clean's numbered names,
+    the first number from there on that is free or holds this result already: the number was
+    picked when the job was packed, and another copy can have taken it since."""
+    while dest.exists() and sha(dest) != digest:
+        numbered = NUMBERED.fullmatch(dest.stem)
+        if not numbered:
+            raise JobError(f'refusing to replace {dest}, a different file')
+        dest = dest.with_name(f'{numbered[1]}{int(numbered[2]) + 1}{dest.suffix}')
+    return dest
+
+
 def collect(package, to=None):
     """Copy a finished job's result and recipe out of the package to each of its destinations
     (beside each photo packed into it), or all into folder `to`. Collecting again is harmless; a
-    different file already at a destination is never replaced. Returns the recipes as written,
-    one per destination."""
+    different file already at a destination is never replaced (a copy with one of clean's numbered
+    names takes the next number instead). Returns the recipes as written, one per destination."""
     package = Path(package).expanduser().resolve()
     job, about = read(package)
     record = done(package)
@@ -316,10 +339,7 @@ def collect(package, to=None):
     planned = []
     for d in destinations:
         folder = Path(to).expanduser().resolve() if to else Path(d['source']).parent
-        dest = folder / d['output_name']
-        if dest.exists() and sha(dest) != record['output_sha256']:
-            raise JobError(f'refusing to replace {dest}, a different file')
-        planned.append((d, folder, dest))
+        planned.append((d, folder, _free(folder / d['output_name'], record['output_sha256'])))
     written = []
     for d, folder, dest in planned:
         folder.mkdir(parents=True, exist_ok=True)

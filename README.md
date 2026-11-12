@@ -169,6 +169,8 @@ jobs from it one at a time, and you collect the results when it suits you:
 openfilmkit clean roll-07 --scratches --queue home   # pack the photos into the queue
 openfilmkit queue status                             # what's waiting, running, done; which workers
 openfilmkit queue collect                            # results beside the originals; queue cleared
+openfilmkit queue retry                              # have the workers try failed jobs again
+openfilmkit queue remove --job 3f2a9c1b              # take a job out, by the start of its ID
 ```
 
 On each machine that should do the work, run `openfilmkit worker`, as a service
@@ -200,6 +202,13 @@ the slow stages the last one pushed (the scratch model's results and every fille
 machine that dies or is switched off loses at most a few minutes of work. A worker that can't
 renew its claim stops rather than finish work another may have taken.
 
+A job that fails on a worker is left to the others. When the failure may pass (the run was killed
+for its memory, a model download dropped), the worker tries again itself, after 15 minutes and
+once more after an hour. A job that can't be done (its photo can't be read) or that failed three
+times stays failed until `queue retry`, which has every worker start over on it, or
+`queue remove`, which takes a job out whatever its state (a worker in the middle of it finishes
+and throws the result away).
+
 Claims keep workers out of each other's way but can't rule out two doing the same job (nothing
 rsync does is atomic, and clocks differ). That's harmless by design: a job gives the same file
 wherever it runs, and collecting keeps the first result that checks out.
@@ -209,7 +218,9 @@ so it can have an SSH key restricted to that (with `rrsync`), and it clears its 
 job has been collected. Collecting checks every result against its recipe and job before taking
 it; one that doesn't check out is deleted (or marked rejected, where collecting may not delete
 it), and the job runs again. Results go back beside the originals only for jobs packed on the
-machine collecting them; for others, `queue collect --to DIR`.
+machine collecting them; for others, `queue collect --to DIR`. A copy whose `-clean-vN` number
+was taken since it was queued (the same photo queued again with other options, say) gets the next
+free number.
 
 ### Job packages
 
