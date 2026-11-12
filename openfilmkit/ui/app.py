@@ -704,7 +704,8 @@ class OpenFilmKitApp(App):
             lines.append(f'Queue [b]{name}[/b]: {summary}')
             for w in info['workers']:
                 busy = f"running {w['running'][:12]}" if w.get('running') else 'idle'
-                lines.append(f"  worker {w['name']}: {busy}, up to {w.get('memory_gb')} GB, seen {w['seen_ago_s']} s ago")
+                seen = f"not seen for {queues.ago(w['seen_ago_s'])}" if w['silent'] else f"seen {queues.ago(w['seen_ago_s'])} ago"
+                lines.append(f"  worker {w['name']}: {busy}, up to {w.get('memory_gb')} GB, {seen}")
         self.from_thread(self._queue_seen, jobs, '\n'.join(lines))
 
     def _queue_seen(self, jobs, text):

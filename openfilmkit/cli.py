@@ -160,8 +160,23 @@ def cmd_options(args, out):
     return 0
 
 
+def unknown_stock(name):
+    """What to say when `name` isn't a stock the kit knows, or None. Such a name is kept as a label,
+    and a slip of the keys (kodak-gold20O) would otherwise be met only as generic conversions."""
+    from .films import stocks
+    if not name or stocks.stock(name)['id'] != 'custom':
+        return None
+    import difflib
+    near = difflib.get_close_matches(name.lower(), [s['id'] for s in stocks.stocks()], n=3, cutoff=0.6)
+    meant = f" Did you mean {' or '.join(near)}?" if near else ''
+    return (f'! No film stock called {name!r} in this kit.{meant} It is kept as a label, and conversions will use '
+            'the generic profile. `openfilmkit stocks` lists the stocks; `roll set --stock` chooses one later.')
+
+
 def cmd_roll_new(args, out):
     record = roll.create(args.path, args.film, args.stock, args.year, args.note)
+    if unknown_stock(args.stock):
+        out.say(unknown_stock(args.stock))
     out.say(f'Roll created: {Path(args.path).expanduser().absolute()}')
     out.result(record)
     return 0
@@ -424,13 +439,17 @@ def cmd_queue(args, out):
         extra = f": {row['error']}" if row.get('error') else ''
         if row['state'] == 'failed' and not row['final']:
             extra += f" (try {row['tries']} of {queues.TRIES}; it will try again)"
+        if row.get('why_waiting'):
+            extra += f": no worker can take it now ({row['why_waiting']})"
         out.say(f"  {row['id'][:12]}  {row['state']}{where}  {Path(row['photo'] or '').name} → {row['output']}{extra}")
     if any(row['state'] == 'failed' and row['final'] for row in info['jobs']):
         out.say('  Failed jobs stay until `queue retry` (try them again) or `queue remove --job ID`.')
     for w in info['workers']:
         busy = f", running {w['running'][:12]}" if w.get('running') else ''
+        seen = (f"not seen for {queues.ago(w['seen_ago_s'])} (stopped, frozen or cut off)" if w['silent']
+                else f"seen {queues.ago(w['seen_ago_s'])} ago")
         out.say(f"  worker {w['name']}: {w.get('version')}, up to {w.get('memory_gb')} GB, "
-                f"hours {w.get('hours') or 'any'}, seen {w['seen_ago_s']} s ago{busy}")
+                f"hours {w.get('hours') or 'any'}, {seen}{busy}")
     out.result(info)
     return 0
 
@@ -499,6 +518,8 @@ def cmd_scan(args, out):
         roll_dir = target
     elif args.frames != 1:
         raise Fail('--frames needs a roll folder, not a file name')
+    if unknown_stock(args.stock):
+        out.say(unknown_stock(args.stock))
     interactive = sys.stdin.isatty() and not out.as_json
     if args.frames > 1 and not interactive:
         # Nothing would wait for the film to be moved: the same frame, scanned again and again.
@@ -688,7 +709,7 @@ def parser():
     s.add_argument('--drop', metavar='HOST:PATH', help="this worker's drop folder (default: QUEUE/drop/NAME)")
     s.add_argument('--name', help="this worker's name (default: the machine's)")
     s.add_argument('--memory', type=float, metavar='GB', help='largest job to take, in GB (default 2.5)')
-    s.add_argument('--hours', metavar='START-END', help='only start jobs in these hours, e.g. 22-7')
+    s.add_argument('--hours', metavar='START-END', help='only start jobs in these hours, e.g. 22-7 or 10pm-7am')
     s.add_argument('--ssh-command', help='ssh command for rsync, e.g. "ssh -i ~/.ssh/queue_key"')
     s.add_argument('--busy-when', action='append', metavar='COMMAND',
                    help="a shell command that succeeds while this machine shouldn't run a job (repeatable)")

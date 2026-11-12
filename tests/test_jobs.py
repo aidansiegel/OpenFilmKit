@@ -3,9 +3,11 @@ stops partway leaves the job unfinished, and nothing is ever half done or overwr
 import contextlib
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -45,6 +47,47 @@ class Jobs(unittest.TestCase):
 
     def pack(self, src=None, **options):
         return jobs.pack_clean(src or self.src, self.queue, protect_faces=False, **options)
+
+    def test_a_pack_that_fails_partway_leaves_nothing_behind(self):
+        """On a full disk, say: the half-made package stayed for good, with its copy of the photo."""
+        with mock.patch.object(jobs, '_copy', side_effect=OSError(28, 'No space left on device')):
+            with self.assertRaises(OSError):
+                self.pack()
+        self.assertEqual(list(self.queue.iterdir()), [])
+        with mock.patch.object(jobs, '_write_json', side_effect=KeyboardInterrupt):   # stopped as it finished
+            with self.assertRaises(KeyboardInterrupt):
+                self.pack()
+        self.assertEqual(list(self.queue.iterdir()), [])
+        self.assertEqual(sorted(p.name for p in self.pack().iterdir()), ['input', 'job.json'])
+
+    def test_what_a_killed_pack_left_is_cleared_a_day_later(self):
+        killed = self.queue / f".{'ab' * 32}.4242.packing"
+        (killed / 'input').mkdir(parents=True)
+        (killed / 'input' / 'photo.png').write_bytes(b'half a photo')
+        under_way = self.queue / f".{'cd' * 32}.4243.packing"     # another pack, running now
+        under_way.mkdir()
+        not_ours = self.queue / '.notes.packing'                  # not a name the kit gives: left alone
+        not_ours.mkdir()
+        for folder in (killed, not_ours):
+            os.utime(folder, (time.time() - 2 * 86400,) * 2)
+        self.pack()
+        self.assertEqual(sorted(p.name for p in self.queue.iterdir() if p.name.startswith('.')),
+                         sorted([under_way.name, not_ours.name]))
+
+    def test_a_result_isnt_collected_into_a_folder_that_has_gone(self):
+        """The photo's drive not connected, say. On Linux the folder was made again under the mount
+        point, on the internal disk, and the job counted as collected."""
+        package = self.pack()
+        jobs.run(package)
+        away = self.root / 'photos-away'
+        (self.root / 'photos').rename(away)
+        with self.assertRaisesRegex(jobs.JobError, 'not there'):
+            jobs.collect(package)
+        self.assertFalse((self.root / 'photos').exists())
+        self.assertTrue(jobs.done(package))                                  # the result waits in the package
+        away.rename(self.root / 'photos')
+        self.assertEqual(len(jobs.collect(package)), 1)                      # and is collected once it's back
+        self.assertEqual(len(jobs.collect(package, self.root / 'new' / 'folder')), 1)   # one named with --to is made
 
     def test_the_same_work_packs_to_the_same_package_from_any_folder(self):
         first = self.pack()

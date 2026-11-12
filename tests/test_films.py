@@ -167,6 +167,16 @@ class Conversion(unittest.TestCase):
   self.raw()
   with self.assertRaises(ValueError):conversion.convert(self.args(gamma=0))
   self.assertFalse((self.root/'view.jpg').exists())
+ def test_a_scan_another_program_made_takes_its_film_and_stock_from_the_roll(self):
+  r=self.root/'roll-41';rolls.create(r,'color-negative','Kodak Gold 200');master=r/'masters'/'silverfast-01.tif';self.raw(master)
+  rec=conversion.convert(self.args(source=str(master),output=str(self.root/'a.jpg'),stock=None,profile=None))
+  self.assertEqual((rec['film_selection']['stock_id'],rec['film_selection']['selection_basis']),('kodak-gold200',"the roll's stock"))
+  s=self.root/'roll-42';rolls.create(s,'slide');master=s/'masters'/'vuescan-01.tif';self.raw(master)
+  rec=conversion.convert(self.args(source=str(master),output=str(self.root/'b.jpg'),stock=None,profile=None,contrast=None))
+  self.assertEqual((rec['film'],rec['film_selection']['stock_id']),('slide','unknown-slide'))
+  rolls.set_choice(r,films.roll_choice('kirkland-200'))     # a choice made with roll set still comes first
+  rec=conversion.convert(self.args(source=str(r/'masters'/'silverfast-01.tif'),output=str(self.root/'c.jpg'),stock=None,profile=None))
+  self.assertEqual((rec['film_selection']['stock_id'],rec['film_selection']['selection_basis']),('kirkland-200','saved roll choice'))
  def test_kit_capture_in_a_roll_uses_roll_choice_and_derived_folder(self):
   r=make_roll(self.root/'roll-35','kirkland-200',profile_id='agfa-hdc200');master=r/'masters'/'frame-01.tif';self.raw(master)
   Path(str(master)+'.json').write_text(json.dumps({'film':{'film':'color-negative','stock':'kirkland-200','roll':{}},'sha256':conversion.sha(master)}))

@@ -47,15 +47,18 @@ def profile_sha256(ident,root=DATA):
     data=profile_bytes(ident,root)
     return hashlib.sha256(json.dumps(json.loads(data),separators=(',',':')).encode()).hexdigest() if data is not None else None
 
-def selection(stock_value=None,saved=None,metadata=None,profile_id=None,root=DATA,roll=None):
-    """`saved` is a roll's film_choice; `roll` names the roll for the record."""
+def selection(stock_value=None,saved=None,metadata=None,profile_id=None,root=DATA,roll=None,roll_stock=None):
+    """`saved` is a roll's film_choice; `roll` names the roll for the record. `roll_stock` is the stock the roll was
+    started with (roll new): it stands in when nothing else says, as for a scan another program made, which has no
+    capture record."""
     metadata=metadata or {};saved=saved or {}
     previous=metadata.get('film_selection') or {}
-    chosen=stock_value or saved.get('stock_id') or previous.get('stock_id') or metadata.get('stock')
+    recorded=saved.get('stock_id') or previous.get('stock_id') or metadata.get('stock')
+    chosen=stock_value or recorded or roll_stock
     entry=stock(chosen,root)
     response=profile_id or (saved.get('profile_id') if not stock_value else None) or (previous.get('profile_id') if not stock_value and not saved else None) or entry['default_profile']
     model=profile(response,root)
-    return dict(stock_id=entry['id'],stock=entry['name'],film=entry.get('film','color-negative'),iso_speed=entry['iso'],roll=roll,profile_id=response,profile_name=model['name'],profile_status=model['calibration'],identity_note=entry['identity_note'],candidate_profiles=entry.get('candidate_profiles',[]),made_in=saved.get('made_in'),year_hint=saved.get('year_hint'),edge_markings=saved.get('edge_markings',''),selection_basis='explicit stock option' if stock_value else ('saved roll choice' if saved else 'capture metadata or unknown'),year_does_not_determine_emulsion=True)
+    return dict(stock_id=entry['id'],stock=entry['name'],film=entry.get('film','color-negative'),iso_speed=entry['iso'],roll=roll,profile_id=response,profile_name=model['name'],profile_status=model['calibration'],identity_note=entry['identity_note'],candidate_profiles=entry.get('candidate_profiles',[]),made_in=saved.get('made_in'),year_hint=saved.get('year_hint'),edge_markings=saved.get('edge_markings',''),selection_basis='explicit stock option' if stock_value else ('saved roll choice' if saved else ("the roll's stock" if roll_stock and not recorded else 'capture metadata or unknown')),year_does_not_determine_emulsion=True)
 
 def roll_choice(stock_value,profile_id=None,made_in=None,year_hint=None,edge_markings='',calibration_file=None,recover_clipped_blue=None,root=DATA):
     """Validate a roll's film choice; roll.set_choice() stores it."""

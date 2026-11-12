@@ -113,6 +113,17 @@ class Rolls(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, self.assertRaises(roll.RollError):
             roll.create(Path(d, 'r'), film='positive')
 
+    def test_a_stock_the_kit_doesnt_know_is_said_when_the_roll_is_started(self):
+        with tempfile.TemporaryDirectory() as d:
+            code, out, _ = kit('roll', 'new', str(Path(d, 'typo')), '--stock', 'kodak-gold20O')   # O for 0
+            self.assertEqual(code, 0)
+            self.assertIn('kodak-gold200', out)                   # what was probably meant
+            self.assertIn('generic', out)                         # and what conversions will use otherwise
+            self.assertEqual(roll.load(Path(d, 'typo'))['stock'], 'kodak-gold20O')   # kept as a label all the same
+            for n, known in enumerate(('kodak-gold200', 'Kodak Gold 200', '')):
+                code, out, _ = kit('roll', 'new', str(Path(d, f'known-{n}')), '--stock', known)
+                self.assertEqual((code, '!' in out), (0, False), known)
+
     def test_a_damaged_roll_file_is_named(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d, 'roll-07')

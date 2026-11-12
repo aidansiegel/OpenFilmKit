@@ -300,7 +300,41 @@ def status(q, now=None):
             row['state'] = 'waiting'
         rows.append(row)
     workers = [dict(info, name=name, seen_ago_s=round(now - info.get('seen', 0))) for name, info in view.workers.items()]
+    for w in workers:   # a worker at work reports at least every RENEW seconds, an idle one every `poll`
+        w['silent'] = w['seen_ago_s'] > LEASE
+    for row in rows:
+        if row['state'] == 'waiting':
+            row['why_waiting'] = _why_waiting(view.jobs[row['id']][0], row['memory_gb'], workers)
     return {'queue': q['name'], 'jobs': rows, 'workers': workers}
+
+
+def ago(seconds):
+    """A length of time in a few words: "40 s", "12 minutes", "37 hours", "5 days 3 hours"."""
+    seconds = int(seconds)
+    if seconds < 120:
+        return f'{seconds} s'
+    if seconds < 7200:
+        return f'{seconds // 60} minutes'
+    days, hours = divmod(seconds // 3600, 24)
+    return f'{days * 24 + hours} hours' if days < 2 else f'{days} days' + (f' {hours} hours' if hours else '')
+
+
+def _why_waiting(job, need, workers):
+    """Why no worker can take a waiting job as things stand, or None when one can and it only
+    waits its turn. Working hours aren't counted: they're in each worker's own time, and they pass."""
+    if not workers:
+        return 'no worker has reported to this queue'
+    whys = []
+    for w in workers:
+        if w['silent']:
+            whys.append(f"{w['name']} has not reported for {ago(w['seen_ago_s'])}")
+        elif (w.get('version'), w.get('build')) != (job.get('openfilmkit'), job.get('build')):
+            whys.append(f"{w['name']} runs another build of OpenFilmKit ({w.get('version')}) than packed it")
+        elif need > w.get('memory_gb', 0):
+            whys.append(f"{w['name']} takes jobs up to {w.get('memory_gb')} GB and this one needs {need}")
+        else:
+            return None
+    return '; '.join(whys)
 
 
 def _reject(q, view, jid, worker, package):
@@ -437,14 +471,31 @@ def worker_settings(**given):
     s.update({k: v for k, v in given.items() if v is not None})
     if not s.get('queue'):
         raise QueueError(f'say which queue to work from (--queue host:path, or [worker] queue in {config_file()})')
+    # A setting of the wrong kind is said here, once, as the worker starts. Left to be met at each look
+    # at the queue, it stopped a service every minute that had just reported in as if at work.
+    for key in ('queue', 'name', 'ssh_command'):
+        if not isinstance(s[key], str):
+            raise QueueError(f'the worker setting {key} is text, in quotes: not {s[key]!r}')
     if not NAME.match(s['name']):
         raise QueueError(f'worker names use letters, digits, ".", "_" and "-": {s["name"]!r}')
     s.setdefault('drop', f"{s['queue'].rstrip('/')}/drop/{s['name']}")
     s['state'] = Path(s.get('state') or _cache() / 'worker')
-    s['memory_gb'] = float(s['memory_gb'])
+    for key, least in (('memory_gb', None), ('yield_mb', 0), ('lease', 0), ('renew', 0), ('settle', 0), ('poll', 0),
+                       ('check', 0)):
+        try:
+            s[key] = float(s[key]) if key == 'memory_gb' or isinstance(s[key], str) else s[key] + 0
+            wrong = isinstance(s[key], bool) or (s[key] <= 0 if least is None else s[key] < least)
+        except (TypeError, ValueError):
+            wrong = True
+        if wrong:
+            raise QueueError(f"the worker setting {key} is a number{' above 0' if least is None else ', 0 or more'}: "
+                             f'not {s[key]!r}')
     for key in ('yield_to', 'busy_when'):
         if isinstance(s[key], str):
             s[key] = [s[key]]
+        if not isinstance(s[key], list) or not all(isinstance(v, str) for v in s[key]):
+            raise QueueError(f'the worker setting {key} is a command, or a list of them, in quotes: not {s[key]!r}')
+    working_hours(s['hours'])
     return s
 
 
@@ -479,12 +530,35 @@ def busy_command(commands):
     return None
 
 
+HOUR = re.compile(r'(\d{1,2})\s*(am|pm)?', re.I)
+
+
+def working_hours(hours):
+    """(start, end) of working hours written "START-END" in whole local hours, on the 24-hour clock
+    ("22-7") or with am and pm ("10pm-7am"); END before START wraps past midnight, so both of those
+    are overnight. None when no hours are set. QueueError for anything else."""
+    if hours is None or hours == '':
+        return None
+    ends = [HOUR.fullmatch(part.strip()) for part in str(hours).split('-')]
+    if len(ends) == 2 and all(ends):
+        span = []
+        for m in ends:
+            h, half = int(m[1]), (m[2] or '').lower()
+            if half:
+                span.append(h % 12 + (12 if half == 'pm' else 0) if 1 <= h <= 12 else None)
+            else:
+                span.append(h if h <= 24 else None)
+        if None not in span and span[0] < 24 and span[0] != span[1]:
+            return tuple(span)
+    raise QueueError(f'working hours are START-END in whole hours, like "22-7" or "10pm-7am": not {hours!r}')
+
+
 def in_hours(hours, at=None):
-    """True inside working hours "START-END" (local hours, 24 h clock; END before START wraps
-    past midnight, so "22-7" is overnight); always true when no hours are set."""
-    if not hours:
+    """True inside working hours (see working_hours); always true when no hours are set."""
+    span = working_hours(hours)
+    if not span:
         return True
-    start, end = (int(v) for v in str(hours).split('-'))
+    start, end = span
     h = time.localtime(at).tm_hour
     return start <= h < end if start <= end else (h >= start or h < end)
 

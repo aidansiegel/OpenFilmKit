@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import socket
+import time
 from pathlib import Path
 
 from . import __version__
@@ -189,6 +190,21 @@ def local_checkpoints(job):
     return base / job_id(job)
 
 
+PACKING = re.compile(r'\.[0-9a-f]{64}\.\d+\.packing')   # a package being made: .<job ID>.<process>.packing
+STALE = 86400
+
+
+def _sweep(into):
+    """Remove what a killed pack left in `into` (one that fails clears up after itself): folders
+    with the name a package has while it's made, a day old, so not one being made now."""
+    for p in into.glob('.*.packing'):
+        try:
+            if PACKING.fullmatch(p.name) and time.time() - p.stat().st_mtime > STALE:
+                shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            pass
+
+
 def _write_package(into, job, about, files):
     jid = job_id(job)
     dest = into / jid
@@ -203,17 +219,21 @@ def _write_package(into, job, about, files):
                 _write_json(dest / 'job.json', {'job': have, 'about': known})
         return dest
     into.mkdir(parents=True, exist_ok=True)
+    _sweep(into)
     tmp = into / f'.{jid}.{os.getpid()}.packing'
     if tmp.exists():
         shutil.rmtree(tmp)
-    (tmp / 'input').mkdir(parents=True)
-    for f in files:
-        if f.is_file():
-            _copy(f, tmp / 'input' / f.name)
-    if sha(tmp / 'input' / about['input_name']) != job['input']['sha256']:
-        shutil.rmtree(tmp)
-        raise JobError('the input changed while it was being packed')
-    _write_json(tmp / 'job.json', {'job': job, 'about': about})
+    try:
+        (tmp / 'input').mkdir(parents=True)
+        for f in files:
+            if f.is_file():
+                _copy(f, tmp / 'input' / f.name)
+        if sha(tmp / 'input' / about['input_name']) != job['input']['sha256']:
+            raise JobError('the input changed while it was being packed')
+        _write_json(tmp / 'job.json', {'job': job, 'about': about})
+    except BaseException:   # a full disk, Ctrl-C: nothing half-made stays behind with its copy of the photo
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
     try:
         os.rename(tmp, dest)
     except OSError:              # packed meanwhile by someone else: theirs is the same job
@@ -339,10 +359,15 @@ def collect(package, to=None):
     planned = []
     for d in destinations:
         folder = Path(to).expanduser().resolve() if to else Path(d['source']).parent
+        if not to and not folder.is_dir():
+            # Its drive isn't connected, say. Made again, the folder would be on whatever disk is under
+            # that path now (the internal one, below a Linux mount point), and the job counted as collected.
+            raise JobError(f"{folder}, where {Path(d['source']).name} was, is not there (is its drive connected?): "
+                           'the result is kept until it is, or collect with --to DIR')
         planned.append((d, folder, _free(folder / d['output_name'], record['output_sha256'])))
     written = []
     for d, folder, dest in planned:
-        folder.mkdir(parents=True, exist_ok=True)
+        folder.mkdir(parents=True, exist_ok=True)   # one named with --to may be new
         if not dest.exists():
             tmp = dest.with_name(f'.{dest.name}.{os.getpid()}.tmp')
             shutil.copyfile(_result(package, about), tmp)

@@ -185,7 +185,7 @@ queue = "server:openfilmkit-queue"   # host:path, or a local path
 [worker]                             # on a worker
 queue = "server:openfilmkit-queue"
 memory_gb = 2.5                      # largest job it takes (and only if the machine has it free)
-hours = "22-7"                       # start jobs only overnight (optional)
+hours = "22-7"                       # start jobs only overnight (optional); "10pm-7am" says the same
 yield_to = "photo-worker.service"    # make way while this service is using memory (optional)
 busy_when = ["curl -fs http://localhost/status.json | grep -Eq '\"state\": *\"(recording|finishing)\"'"]
                                      # make way while any of these commands succeeds (optional)
@@ -222,7 +222,12 @@ it; one that doesn't check out is deleted (or marked rejected, where collecting 
 it), and the job runs again. Results go back beside the originals only for jobs packed on the
 machine collecting them; for others, `queue collect --to DIR`. A copy whose `-clean-vN` number
 was taken since it was queued (the same photo queued again with other options, say) gets the next
-free number.
+free number. A result whose photo's folder isn't there (its drive not connected) stays in the
+queue until it is.
+
+`queue status` says when a worker hasn't reported for ten minutes (stopped, frozen or cut off), and
+why a waiting job can't be taken as things stand: every worker runs another build of OpenFilmKit
+than packed it, or none offers the memory it needs.
 
 ### Job packages
 

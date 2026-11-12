@@ -105,6 +105,78 @@ class Queue(unittest.TestCase):
         self.assertEqual(list((self.queue / 'drop' / 'w1' / 'results').iterdir()), [])
         self.assertEqual(queues.status(self.q)['jobs'], [])
 
+    def test_a_result_stays_in_the_queue_while_its_photos_folder_is_away(self):
+        self.queue_photos()
+        w = self.worker('w1')
+        w.once(), w.once()
+        away = self.root / 'photos-away'
+        (self.root / 'photos').rename(away)                                 # the photos' drive, unplugged
+        code, recs = self.ofk('queue', 'collect')
+        self.assertEqual((code, ['not there' in r.get('error', '') for r in recs]), (1, [True, True]))
+        self.assertFalse((self.root / 'photos').exists())
+        self.assertEqual(self.states(), ['done', 'done'])
+        away.rename(self.root / 'photos')
+        code, recs = self.ofk('queue', 'collect')
+        self.assertEqual((code, len(recs), queues.status(self.q)['jobs']), (0, 2, []))
+
+    def test_working_hours_are_read_when_the_worker_starts(self):
+        """"10pm-7am" or "22" raised an error at every look at the queue, after the worker had
+        reported in: a service restarting every minute that `queue status` showed as fine."""
+        def at(hour):
+            return time.mktime((2026, 11, 12, hour, 30, 0, 0, 0, -1))
+        for hours, hour, inside in (('22-7', 23, True), ('22-7', 12, False), ('10pm-7am', 23, True),
+                                    ('10pm-7am', 6, True), ('10pm-7am', 8, False), ('9am-5pm', 12, True),
+                                    ('9am-5pm', 17, False), ('12am-6am', 0, True), ('12pm-1pm', 12, True),
+                                    ('10 PM - 7 AM', 2, True), ('0-24', 3, True), (None, 3, True), ('', 3, True)):
+            self.assertEqual(queues.in_hours(hours, at(hour)), inside, (hours, hour))
+        for wrong in ('22', 'night', '25-3', '13pm-2am', '0am-5am', '7-7', '-7', '22-', '10:30pm-7am', '22-7-3', 22):
+            with self.assertRaisesRegex(queues.QueueError, 'hours'):
+                queues.worker_settings(queue=str(self.queue), name='w1', hours=wrong)
+        code, said = self.ofk('worker', '--queue', str(self.queue), '--hours', '22', '--once')
+        self.assertEqual(code, 1)
+        self.assertIn('10pm-7am', said['error'])                            # how to write them
+        self.assertFalse((self.queue / 'drop').exists())                    # and it hasn't reported in as if at work
+
+    def test_worker_settings_of_the_wrong_kind_are_said_too(self):
+        hosts = self.root / 'config' / 'hosts.toml'
+        for line, key in (('memory_gb = "lots"', 'memory_gb'), ('memory_gb = 0', 'memory_gb'), ('poll = "often"', 'poll'),
+                          ('lease = -5', 'lease'), ('busy_when = 5', 'busy_when'), ('yield_to = [1, 2]', 'yield_to'),
+                          ('name = 7', 'name'), ('ssh_command = ["ssh"]', 'ssh_command')):
+            hosts.write_text(f'[worker]\nqueue = "{self.queue}"\n{line}\n')
+            with self.assertRaisesRegex(queues.QueueError, key):
+                queues.worker_settings()
+        hosts.write_text(f'[worker]\nqueue = "{self.queue}"\nmemory_gb = "1.5"\nbusy_when = "true"\nlater = "ignored"\n')
+        s = queues.worker_settings()
+        self.assertEqual((s['memory_gb'], s['busy_when']), (1.5, ['true']))
+
+    def test_status_says_when_a_worker_has_gone_quiet_and_why_a_job_waits(self):
+        self.queue_photos()
+        waits = lambda info: [row.get('why_waiting') for row in info['jobs']]
+        self.assertEqual(waits(queues.status(self.q)), ['no worker has reported to this queue'] * 2)
+        small = self.worker('small', memory_gb=0.1)
+        self.assertIsNone(small.once())                                     # too big for it
+        info = queues.status(self.q)
+        self.assertTrue(all('small takes jobs up to 0.1 GB' in why for why in waits(info)), waits(info))
+        with mock.patch.object(jobs, 'build', lambda: 'another-build'):
+            self.worker('old').publish()
+        info = queues.status(self.q)
+        self.assertTrue(all('old runs another build' in why and 'small' in why for why in waits(info)), waits(info))
+        able = self.worker('able')
+        able.publish()
+        info = queues.status(self.q)
+        self.assertEqual((waits(info), [w['silent'] for w in info['workers']]), ([None, None], [False] * 3))
+        later = time.time() + 37 * 3600 + 49 * 60                           # as portable was, on Nov 11
+        info = queues.status(self.q, now=later)
+        self.assertEqual([w['silent'] for w in info['workers']], [True] * 3)
+        self.assertTrue(all('able has not reported for 37 hours' in why for why in waits(info)), waits(info))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(queues, '_now', lambda: later):
+            self.assertEqual(cli.main(['queue', 'status']), 0)
+        said = out.getvalue()
+        self.assertIn('not seen for 37 hours', said)
+        self.assertIn('no worker can take it now', said)
+        self.assertNotIn(' s ago', said)
+
     def test_a_worker_runs_each_job_in_its_own_process_and_keeps_its_claim_alive(self):
         self.queue_photos()
         beats = []

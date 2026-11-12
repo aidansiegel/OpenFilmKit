@@ -175,9 +175,11 @@ def convert(args,root=film_stocks.DATA):
     meta=capture_metadata(source)
     roll_dir=Path(args.roll).expanduser().resolve() if args.roll else rolls.containing(source)
     if roll_dir and not rolls.is_roll(roll_dir):raise ValueError(f'{roll_dir} is not a roll folder')
-    saved_roll=(rolls.load(roll_dir).get('film_choice') or {}) if roll_dir else {}
+    about_roll=rolls.load(roll_dir) if roll_dir else {};saved_roll=about_roll.get('film_choice') or {}
+    # A scan another program made has no capture record to say its film: what its roll was started as stands in.
+    if not meta.get('film') and about_roll.get('film') not in (None,'','unknown'):meta['film']=about_roll['film']
     if meta.get('film')=='bw-negative':raise ValueError('This converter handles color negatives and slides; capture metadata identifies a black-and-white negative.')
-    chosen=film_stocks.selection(args.stock,saved_roll,meta,args.profile,root,roll=roll_dir.name if roll_dir else None)
+    chosen=film_stocks.selection(args.stock,saved_roll,meta,args.profile,root,roll=roll_dir.name if roll_dir else None,roll_stock=about_roll.get('stock'))
     if meta.get('film')=='slide' and chosen['stock_id']=='unknown':chosen=film_stocks.selection('unknown-slide',None,{},args.profile,root)
     film=chosen['film'];model=film_stocks.profile(chosen['profile_id'],root)
     if meta.get('film') in ('slide','color-negative') and meta['film']!=film:raise ValueError(f"Capture metadata says {meta['film']}, but the selected stock is a {film}.")
