@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, capture, identify, options as opts, roll, scanners
-from .runtime import Runtime, RuntimeMissing, udev_status
+from .runtime import Runtime, RuntimeMissing, ScanimageError, tiffinfo, udev_status
 
 DATA = Path(__file__).parent / 'data'
 
@@ -101,6 +101,12 @@ def cmd_doctor(args, out):
                     f"\n  Install it with:\n  {udev['fix']}")
     if not results and not unclaimed:
         out.say('\nNo scanner found. Check power and USB, and close other scanner software.')
+    try:
+        info['tiffinfo'] = tiffinfo()
+    except RuntimeMissing as e:
+        info['tiffinfo'] = None
+        out.say(f'\n! {e}: no scan can be saved without it. It comes with libtiff '
+                '(brew install libtiff, or apt install libtiff-tools).')
     if args.dest:
         dest = Path(args.dest).expanduser()
         if dest.exists():
@@ -114,7 +120,9 @@ def cmd_doctor(args, out):
     out.result(info)
     if not results:
         return 2
-    return 0 if all(r['status'] in identify.SCANNABLE for r in results) else 3
+    if not all(r['status'] in identify.SCANNABLE for r in results):
+        return 3
+    return 0 if info['tiffinfo'] else 1
 
 
 def cmd_scanners(args, out):
@@ -491,6 +499,11 @@ def cmd_scan(args, out):
         roll_dir = target
     elif args.frames != 1:
         raise Fail('--frames needs a roll folder, not a file name')
+    interactive = sys.stdin.isatty() and not out.as_json
+    if args.frames > 1 and not interactive:
+        # Nothing would wait for the film to be moved: the same frame, scanned again and again.
+        raise Fail('--frames above 1 waits at a prompt for you to move the film on, so it needs a terminal '
+                   'and no --json; scan one frame per command instead')
 
     runtime = Runtime.find(args.runtime)
     scanner, name = select(runtime, args.device)
@@ -509,7 +522,6 @@ def cmd_scan(args, out):
     settings = runtime.run(capture.command(runtime, name, plan, extra)[1:-2] +
                            ['--all-options', '--dont-scan']).stdout
     film = film_info(args, roll_dir)
-    interactive = sys.stdin.isatty() and not out.as_json
 
     records = []
     frame = 0
@@ -761,7 +773,7 @@ def main(argv=None):
         out.error(f'openfilmkit: {e}')
         out.result({'error': str(e), 'detail': e.detail})
         return e.code
-    except (RuntimeMissing, roll.RollError, capture.CaptureError, OSError) as e:
+    except (RuntimeMissing, ScanimageError, roll.RollError, capture.CaptureError, OSError) as e:
         if isinstance(e, OSError) and _pipe_error(e) and _stdout_closed():
             # The reader went away (`openfilmkit scanners | head`): stop quietly, like a SIGPIPE.
             return 141

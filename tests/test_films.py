@@ -135,6 +135,12 @@ class Conversion(unittest.TestCase):
   raw=np.full((4,6,3),40000,np.uint16);lut=np.repeat(np.arange(65536,dtype=np.uint16)[:,None],3,axis=1)
   a=conversion.render(raw,lut,gamma=1);b=conversion.render(raw,lut,gamma=1.08)
   self.assertEqual(a.shape,b.shape);self.assertTrue((b>a).all())
+ def test_a_levels_or_calibration_file_that_moved_or_broke_is_named(self):
+  self.raw();gone=str(self.root/'moved.jpg.json');broken=self.root/'broken.json';broken.write_text('{"scenes": [');other=self.root/'other.json';other.write_text('{"note": "something else"}')
+  for n,path in enumerate((gone,str(broken),str(other))):
+   for kw in (dict(levels_from=path),dict(calibration=path)):
+    with self.assertRaisesRegex(ValueError,Path(path).name):conversion.convert(self.args(**kw))
+    self.assertFalse((self.root/'view.jpg').exists(),(n,kw))
  def test_checksum_mismatch_stops_before_writing(self):
   self.raw();Path(str(self.root/'raw.tif')+'.json').write_text(json.dumps({'sha256':'bad'}))
   with self.assertRaises(ValueError):conversion.convert(self.args())

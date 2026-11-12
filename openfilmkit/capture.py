@@ -112,6 +112,7 @@ def check_tiff(info, plan, prof):
 def capture(runtime, out, device, plan, prof, scanner, film, options_text, estimate=None,
             extra=(), progress=sys.stderr):
     """Scan to `out`. Returns the final record; raises CaptureError on failure."""
+    tiffinfo()   # the capture is verified with it: if it's missing, say so now, not after the scan
     p = paths(out)
     check_destination(p, estimate)
     cmd = command(runtime, device, plan, extra)

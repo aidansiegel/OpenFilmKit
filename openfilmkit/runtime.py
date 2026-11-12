@@ -18,6 +18,26 @@ class RuntimeMissing(Exception):
     pass
 
 
+class ScanimageError(Exception):
+    """scanimage failed, or gave no answer in time."""
+
+
+def run_scanimage(cmd, env=None, timeout=60):
+    """Run scanimage (`cmd`, the program first) to its end and return the finished run.
+    ScanimageError with what it said if it failed or gave no answer in `timeout` seconds, as it
+    does when another program has the scanner, USB permission is denied, or a library it needs
+    went with an upgrade."""
+    try:
+        return subprocess.run([str(c) for c in cmd], env=env, capture_output=True, text=True,
+                              timeout=timeout, check=True)
+    except subprocess.CalledProcessError as e:
+        said = (e.stderr or e.stdout or '').strip()
+        raise ScanimageError(f'scanimage failed (exit status {e.returncode})' + (f': {said}' if said else '')) from e
+    except subprocess.TimeoutExpired as e:
+        raise ScanimageError(f'scanimage gave no answer in {timeout} seconds: the scanner may be busy or stuck '
+                             '(close other scanner software, or turn the scanner off and on)') from e
+
+
 class Runtime:
     def __init__(self, prefix):
         self.prefix = Path(prefix).expanduser().resolve()
@@ -56,8 +76,7 @@ class Runtime:
         return env
 
     def run(self, args, timeout=60):
-        return subprocess.run([str(self.scanimage), *map(str, args)], env=self.env(),
-                              capture_output=True, text=True, timeout=timeout, check=True)
+        return run_scanimage([self.scanimage, *args], self.env(), timeout)
 
     def version(self):
         return self.run(['--version']).stdout.strip()

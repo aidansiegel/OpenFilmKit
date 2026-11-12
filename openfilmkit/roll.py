@@ -38,7 +38,11 @@ def create(path, film='unknown', stock='', year=None, note=''):
 
 
 def load(path):
-    return json.loads((Path(path) / 'roll.json').read_text())
+    file = Path(path) / 'roll.json'
+    try:
+        return json.loads(file.read_text())
+    except ValueError as e:
+        raise RollError(f'{file} is damaged ({e})') from e
 
 
 def set_choice(path, choice):

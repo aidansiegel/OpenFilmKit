@@ -24,6 +24,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .runtime import run_scanimage
+
 TABLE = Path(__file__).parent / 'data' / 'sane-models.json'
 LISTING_FORMAT = '%d\t%v\t%m\t%t%n'
 
@@ -227,8 +229,7 @@ def identify(listing, usb, table):
 
 
 def list_scanners(scanimage='scanimage', env=None):
-    out = subprocess.run([scanimage, f'--formatted-device-list={LISTING_FORMAT}'],
-                         capture_output=True, text=True, timeout=60, env=env, check=True)
+    out = run_scanimage([scanimage, f'--formatted-device-list={LISTING_FORMAT}'], env)
     return parse_listing(out.stdout)
 
 

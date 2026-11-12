@@ -77,6 +77,15 @@ def validate_levels(low,high):
         raise ValueError('Invalid or degenerate transmission endpoints.')
     return lo,hi
 
+def named_file(path,what,keys):
+    """What's in a JSON file named by an option or a roll's settings. ValueError naming the file when it has moved,
+    is damaged, or isn't that kind of file (it lacks one of `keys`), where a traceback used to be."""
+    try:data=json.loads(Path(path).read_text())
+    except FileNotFoundError:raise ValueError(f'{what}: {path} is not there (moved or deleted?)') from None
+    except ValueError as e:raise ValueError(f'{what}: {path} is damaged ({e})') from None
+    if not isinstance(data,dict) or any(k not in data for k in keys):raise ValueError(f"{what}: {path} is not that kind of file (it has no {' or no '.join(keys)})")
+    return data
+
 def fit_levels(area):
     """Per-frame transmission endpoints: 0.2/99.8 percentiles of the film, ignoring a 4% border and clipped samples."""
     step=max(1,math.ceil(max(area.shape[:2])/1800));sample=area[::step,::step].astype(float)/65535
@@ -181,8 +190,8 @@ def convert(args,root=film_stocks.DATA):
     if not (0<=x0<x1<=w and 0<=y0<y1<=h):raise ValueError('Crop lies outside the source TIFF.')
     area=raw[y0:y1,x0:x1];health=scan_health.check(area)
     if args.levels_from:
-        prior_path=Path(args.levels_from).expanduser().resolve();prior=film_stocks.read(prior_path)
-        if prior['film_selection']['profile_id']!=chosen['profile_id'] or prior['film_selection']['stock_id']!=chosen['stock_id']:
+        prior_path=Path(args.levels_from).expanduser().resolve();prior=named_file(prior_path,'--levels-from',('film_selection','transmission_low_rgb','transmission_high_rgb'));selected=prior['film_selection'] or {}
+        if selected.get('profile_id')!=chosen['profile_id'] or selected.get('stock_id')!=chosen['stock_id']:
             raise ValueError('Shared levels must use the same stock and response profile.')
         lo,hi=validate_levels(prior['transmission_low_rgb'],prior['transmission_high_rgb']);levels_basis=dict(type='shared',source=str(prior_path),sha256=sha(prior_path))
     else:
@@ -192,7 +201,7 @@ def convert(args,root=film_stocks.DATA):
     if calibration_path:
         if film=='slide':raise ValueError('Density calibration plans are for color negatives.')
         if args.levels_from:raise ValueError('Choose scene calibration or shared transmission endpoints, not both.')
-        plan_path=Path(calibration_path).expanduser().resolve();plan=film_stocks.read(plan_path)
+        plan_path=Path(calibration_path).expanduser().resolve();plan=named_file(plan_path,'calibration file',('scenes',))
         scenes=plan['scenes'];scene_name=getattr(args,'scene',None) or plan.get('capture_scenes',{}).get(digest)
         if scene_name is None and len(scenes)!=1:raise ValueError('--scene is required for a calibration with several scenes.')
         matches=[r for r in scenes if scene_name is None or r['scene']==scene_name]

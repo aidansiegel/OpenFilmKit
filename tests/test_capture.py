@@ -1,5 +1,6 @@
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -9,8 +10,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from openfilmkit import capture, cli, options as opts, roll, scanners  # noqa: E402
-from openfilmkit.runtime import Runtime, RuntimeMissing  # noqa: E402
+from openfilmkit import capture, cli, identify, options as opts, roll, scanners  # noqa: E402
+from openfilmkit.runtime import Runtime, RuntimeMissing, ScanimageError  # noqa: E402
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 SE = opts.parse((FIXTURES / 'options-8200i-se.txt').read_text())
@@ -112,6 +113,17 @@ class Rolls(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, self.assertRaises(roll.RollError):
             roll.create(Path(d, 'r'), film='positive')
 
+    def test_a_damaged_roll_file_is_named(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, 'roll-07')
+            roll.create(path)
+            (path / 'roll.json').write_text('{"format": 1, "name": ')      # cut short
+            with self.assertRaisesRegex(roll.RollError, 'damaged'):
+                roll.load(path)
+            code, _, err = kit('roll', 'set', str(path), '--stock', 'kodak-gold200')
+            self.assertEqual(code, 1)
+            self.assertIn(str(path / 'roll.json'), err)
+
 
 class Destination(unittest.TestCase):
     def test_refuses_existing_and_wrong_suffix(self):
@@ -136,6 +148,99 @@ class Destination(unittest.TestCase):
             capture.check_tiff(dict(full, dpi_x=3600.0), plan, SE_PROFILE)
         with self.assertRaisesRegex(capture.CaptureError, 'full frame'):
             capture.check_tiff(dict(full, height=5000), plan, SE_PROFILE)
+
+
+def kit(*args):
+    """Run the command line: (exit status, what it printed, what it said on stderr)."""
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        code = cli.main(list(args))
+    return code, out.getvalue(), err.getvalue()
+
+
+def fake_runtime(folder):
+    """A folder that passes for a kit runtime; the tests stand in for its programs."""
+    Path(folder, 'build-provenance.json').write_text(json.dumps(
+        {'commit': 'abcdef1234', 'patches': [], 'backends': ['genesys']}))
+    return str(folder)
+
+
+class ScannerProgram(unittest.TestCase):
+    """When scanimage fails or doesn't answer, the command says what it said: no traceback."""
+    def test_what_scanimage_said_is_shown(self):
+        busy = subprocess.CalledProcessError(
+            1, ['scanimage'], stderr='scanimage: open of device genesys failed: Device busy\n')
+        with tempfile.TemporaryDirectory() as d, mock.patch('subprocess.run', side_effect=busy):
+            for command in (('doctor',), ('options',), ('scan', str(Path(d, 'frame.tif')))):
+                code, out, err = kit(*command, '--runtime', fake_runtime(d), '--json')
+                self.assertEqual(code, 1, command)
+                self.assertIn('Device busy', err)
+                self.assertIn('Device busy', json.loads(out)['error'])
+            self.assertEqual([p.name for p in Path(d).iterdir()], ['build-provenance.json'])
+
+    def test_a_scanner_that_doesnt_answer_is_said_too(self):
+        slow = subprocess.TimeoutExpired(['scanimage'], 60)
+        with tempfile.TemporaryDirectory() as d, mock.patch('subprocess.run', side_effect=slow):
+            code, _, err = kit('doctor', '--runtime', fake_runtime(d))
+            self.assertEqual(code, 1)
+            self.assertIn('60 seconds', err)
+            with self.assertRaisesRegex(ScanimageError, '60 seconds'):
+                identify.list_scanners()
+
+
+def terminal(there):
+    """Run as at a terminal, or as without one (a script, a pipe)."""
+    return mock.patch('sys.stdin', mock.Mock(isatty=lambda: there))
+
+
+class Frames(unittest.TestCase):
+    def test_several_frames_need_someone_there_to_move_the_film(self):
+        """Without a terminal to pause at, --frames 3 scanned the same frame three times."""
+        untouched = mock.patch.object(Runtime, 'find', side_effect=RuntimeMissing('no runtime in this test'))
+        with tempfile.TemporaryDirectory() as d, untouched as find:
+            path = Path(d, 'roll-01')
+            roll.create(path)
+            with terminal(True):
+                code, _, err = kit('scan', str(path), '--frames', '3', '--json')
+            self.assertEqual(code, 1)
+            self.assertIn('--frames', err)
+            with terminal(False):
+                code, _, err = kit('scan', str(path), '--frames', '3')
+            self.assertEqual(code, 1)
+            self.assertIn('--frames', err)
+            find.assert_not_called()                 # refused before the scanner is looked for
+            with terminal(True):
+                code, _, err = kit('scan', str(path), '--frames', '3')    # at a terminal it goes ahead
+            self.assertIn('no runtime in this test', err)
+            for args in (['--json'], []):            # and one frame never needed a prompt
+                with terminal(False):
+                    self.assertIn('no runtime in this test', kit('scan', str(path), *args)[2])
+
+
+class Tiffinfo(unittest.TestCase):
+    """A capture is verified with tiffinfo, so its absence is said before the scan, not after."""
+    missing = RuntimeMissing('tiffinfo (libtiff) is required to verify captures')
+
+    def test_a_scan_isnt_started_without_it(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(capture, 'tiffinfo', side_effect=self.missing):
+            with self.assertRaisesRegex(RuntimeMissing, 'tiffinfo'):
+                capture.capture(None, Path(d, 'frame.tif'), 'test:0', {}, None, {}, {}, '')
+            self.assertEqual(list(Path(d).iterdir()), [])
+
+    def test_doctor_says_whether_it_is_there(self):
+        scanner = {'device': 'genesys:libusb:001:004', 'backend': 'genesys', 'vendor': 'PLUSTEK',
+                   'model': 'OpticFilm 8200i', 'id': 'genesys/plustek-opticfilm-8200i-se',
+                   'status': identify.EXACT, 'profile': None, 'usb': None, 'problems': []}
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(Runtime, 'version', lambda self: 'scanimage (sane-backends) 1.4.0'), \
+                mock.patch.object(cli, 'detect', lambda runtime: ([scanner], [])):
+            with mock.patch.object(cli, 'tiffinfo', return_value='/usr/bin/tiffinfo'):
+                code, out, _ = kit('doctor', '--runtime', fake_runtime(d), '--json')
+            self.assertEqual((code, json.loads(out)['tiffinfo']), (0, '/usr/bin/tiffinfo'))
+            with mock.patch.object(cli, 'tiffinfo', side_effect=self.missing):
+                code, out, err = kit('doctor', '--runtime', fake_runtime(d), '--json')
+            self.assertEqual((code, json.loads(out)['tiffinfo']), (1, None))
+            self.assertIn('tiffinfo', err)
 
 
 def runtime_or_none():
