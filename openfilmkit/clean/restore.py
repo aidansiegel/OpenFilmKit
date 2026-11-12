@@ -172,17 +172,25 @@ def faint_stamp(img):
     A camera prints its stamp at a fixed size on the frame, so the search runs on a copy whose
     short side is STAMP_SIDE pixels whatever the image's resolution, and the result is scaled back.
     On 118 prints and conversions this found 35 stamps, 11 of them missed by bright_stamp, and
-    nothing else."""
+    nothing else.
+
+    A small image is enlarged for that, and a thin strip of one enormously: 200 x 12 pixels became
+    a copy of 43 megapixels, 700 MB with the work on it. No frame a camera stamps is more than a
+    few times longer than it is high, so a strip whose enlarged copy would pass STAMP_PIXELS has
+    no stamp to find and is not searched."""
     h, w = img.shape[:2]
     s = STAMP_SIDE / min(h, w)
     if s == 1:
         return faint_stamp_at(img)
+    if s > 1 and round(w * s) * round(h * s) > STAMP_PIXELS:
+        return np.zeros((h, w), bool)
     work = cv2.resize(img, (max(1, round(w * s)), max(1, round(h * s))),
                       interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_CUBIC)
     return cv2.resize(faint_stamp_at(work).astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
 
 
 STAMP_SIDE = 1600
+STAMP_PIXELS = 4 * STAMP_SIDE ** 2    # the most an image is enlarged to: a frame four times longer than high
 
 
 def faint_stamp_at(img):
@@ -325,7 +333,8 @@ def box_mask(shape, boxes, pad=0.5):
 
 def color_cast(img):
     """Mean a*, b* (Lab, 0 = neutral) of the image's near-neutral pixels: a measure of cast."""
-    small = cv2.resize(img, (400, int(400 * img.shape[0] / img.shape[1])), interpolation=cv2.INTER_AREA)
+    # 400 wide, and between 1 and 3200 high: a strip a pixel wide would otherwise be 80 megapixels here
+    small = cv2.resize(img, (400, min(3200, max(1, int(400 * img.shape[0] / img.shape[1])))), interpolation=cv2.INTER_AREA)
     lab = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
     a, b = lab[..., 1] - 128, lab[..., 2] - 128
     neutral = (np.hypot(a, b) < 25) & (lab[..., 0] > 40) & (lab[..., 0] < 235)

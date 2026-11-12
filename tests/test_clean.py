@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -213,6 +214,37 @@ class Clean(unittest.TestCase):
         roll.create(r)
         with contextlib.redirect_stderr(err):
             self.assertNotEqual(cli.main(['clean', str(r), '--spot', '10,10']), 0)
+
+
+@unittest.skipIf(clean is None, 'needs OpenCV, numpy and Pillow')
+class ThinImages(unittest.TestCase):
+    """Nothing is enlarged without limit on a strip a few pixels wide or high."""
+    def test_a_thin_strip_isnt_enlarged_to_look_for_a_date_stamp(self):
+        """A 200 x 12 image became a 43-megapixel copy for the search: 700 MB with the work on it."""
+        with mock.patch.object(restore, 'faint_stamp_at') as search:
+            for shape in ((12, 200, 3), (500, 1, 3)):
+                mask = restore.faint_stamp(np.full(shape, 120, np.uint8))
+                self.assertEqual((mask.shape, mask.dtype, bool(mask.any())), (shape[:2], np.dtype(bool), False))
+        search.assert_not_called()
+        with mock.patch.object(restore, 'faint_stamp_at', wraps=restore.faint_stamp_at) as search:
+            restore.faint_stamp(scene(w=640, h=480))              # an ordinary small photo is still searched
+            restore.faint_stamp(scene(w=720, h=240))              # and a panorama
+        self.assertEqual([c.args[0].shape[:2] for c in search.call_args_list], [(1600, 2133), (1600, 4800)])
+
+    def test_a_thin_strip_is_cleaned_like_any_photo(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name, (h, w) in (('wide.png', (12, 200)), ('tall.png', (500, 1))):
+                Image.fromarray(scene(w=w, h=h)).save(Path(d, name))
+                rec = clean.clean(Path(d, name), protect_faces=False, color=True)
+                self.assertEqual(rec['source_dimensions'], [w, h])
+                self.assertTrue(Path(rec['output']).exists())
+
+    def test_the_color_cast_is_measured_on_a_copy_of_bounded_size(self):
+        with mock.patch.object(restore.cv2, 'resize', wraps=restore.cv2.resize) as resize:
+            for shape in ((12, 5000, 3), (500, 1, 3), (600, 900, 3), (900, 600, 3)):   # the last two: as ever
+                a, b = restore.color_cast(np.full(shape, 120, np.uint8))
+                self.assertTrue(abs(a) < 3 and abs(b) < 3, shape)
+        self.assertEqual([c.args[1] for c in resize.call_args_list], [(400, 1), (400, 3200), (400, 266), (400, 600)])
 
 
 def rgb_profile(primaries):
