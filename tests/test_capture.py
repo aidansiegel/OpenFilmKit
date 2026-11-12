@@ -1,8 +1,13 @@
 import io
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
+import time
+import types
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
@@ -124,6 +129,17 @@ class Rolls(unittest.TestCase):
                 code, out, _ = kit('roll', 'new', str(Path(d, f'known-{n}')), '--stock', known)
                 self.assertEqual((code, '!' in out), (0, False), known)
 
+    def test_a_frame_named_in_capitals_keeps_its_number(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, 'roll-09')
+            roll.create(path)
+            (path / 'masters' / 'frame-01.tif').write_bytes(b'')
+            (path / 'masters' / 'FRAME-02.TIF').write_bytes(b'')         # as another program, or a camera card, names it
+            self.assertEqual(roll.next_frame(path).name, 'frame-03.tif')
+            (path / 'roll.json').write_text('[1, 2]')                    # JSON, but not a roll's record
+            with self.assertRaisesRegex(roll.RollError, 'damaged'):
+                roll.load(path)
+
     def test_a_damaged_roll_file_is_named(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d, 'roll-07')
@@ -228,6 +244,205 @@ class Frames(unittest.TestCase):
                     self.assertIn('no runtime in this test', kit('scan', str(path), *args)[2])
 
 
+class ScanOptions(unittest.TestCase):
+    def test_what_the_kit_sets_itself_cant_be_set_again_behind_its_back(self):
+        """scanimage takes the later of two options: --scanimage-arg=--source=... scanned from another
+        source while the record went on stating the plan."""
+        untouched = mock.patch.object(Runtime, 'find', side_effect=RuntimeMissing('no runtime in this test'))
+        with tempfile.TemporaryDirectory() as d, untouched as find:
+            for extra in ('--resolution=1200', '--source=Flatbed', '--mode', '-d', '--output-file=/tmp/x.tif',
+                          '--batch=x%d.tif', '--format=png', '--device-name=other:0'):
+                code, _, err = kit('scan', str(Path(d, 'frame.tif')), f'--scanimage-arg={extra}')
+                self.assertEqual(code, 1, extra)
+                self.assertIn('the kit sets that itself', err, extra)
+            for n, wrong in enumerate((['--dpi', '0'], ['--dpi', '-300'], ['--frames', '0'], ['--frames', '-1'])):
+                roll.create(Path(d, f'roll-{n}'))
+                self.assertEqual(kit('scan', str(Path(d, f'roll-{n}')), *wrong)[0], 1, wrong)
+            find.assert_not_called()
+            code, _, err = kit('scan', str(Path(d, 'frame.tif')), '--scanimage-arg=-x', '--scanimage-arg=20')
+            self.assertIn('no runtime in this test', err)                # the scan area may be given this way
+
+    def test_a_usb_listing_that_isnt_well_formed_falls_back_to_the_name(self):
+        bad = (b'<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array><dict><key>USB Product Name</key>'
+               b'<string>bad \x01 char</string></dict></array></plist>')
+        with mock.patch('subprocess.check_output', return_value=bad), mock.patch.object(sys, 'platform', 'darwin'):
+            self.assertIsNone(identify.usb_devices())
+
+
+STUB = '''#!{python}
+# A stand-in for scanimage: what it does is chosen by STUB_MODE, and it notes what happened to it in STUB_MARKS.
+import os, signal, sys, time
+mode, marks = os.environ.get('STUB_MODE'), os.environ.get('STUB_MARKS')
+if '--version' in sys.argv:
+    print('stub')
+    sys.exit(0)
+def mark(word):
+    with open(marks, 'a') as f:
+        f.write(word + chr(10))
+mark(f'pid={{os.getpid()}}')
+if mode == 'cancel':      # as scanimage does: the first signal cancels the scan and parks, a second exits at once
+    got = []
+    def told(signum, frame):
+        got.append(signum)
+        if len(got) > 1:
+            mark('aborted')
+            os._exit(3)
+        mark('stopping')
+    signal.signal(signal.SIGINT, told)
+    signal.signal(signal.SIGTERM, told)
+    sys.stderr.write('Progress: 1%' + chr(13))
+    sys.stderr.flush()
+    mark('scanning')
+    while not got:
+        time.sleep(0.05)
+    time.sleep(0.5)       # the carriage going home
+    mark('parked')
+    sys.exit(2)
+if mode == 'silent':
+    sys.stderr.write('warming up' + chr(10))
+    sys.stderr.flush()
+    mark('scanning')
+    time.sleep(120)
+if mode == 'odd':
+    sys.stderr.buffer.write(bytes([99, 97, 102, 233, 32, 255, 254, 10]))   # not UTF-8
+for n in range(50):
+    sys.stderr.write(f'Progress: {{n}}%' + chr(13))
+    sys.stderr.flush()
+sys.stdout.buffer.write(bytes(2000))
+'''
+PLAN = {'source': None, 'mode': 'Color', 'depth': 16, 'dpi': 75}
+
+
+@unittest.skipIf(os.name != 'posix', 'the stand-in for scanimage is a script')
+class StandIn(unittest.TestCase):
+    """capture() driving a stand-in for scanimage: what a real scanner can do that SANE's test one doesn't."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name).resolve()
+        self.program = self.root / 'scanimage'
+        self.program.write_text(STUB.format(python=sys.executable))
+        self.program.chmod(0o755)
+        self.marks, self.out = self.root / 'marks', self.root / 'frame.tif'
+        for patch in (mock.patch.object(capture, 'MIN_FREE', 0), mock.patch.object(capture, 'MARGIN', 0),
+                      mock.patch.object(capture, 'tiffinfo', lambda: 'tiffinfo')):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.addCleanup(self.temp.cleanup)
+
+    def runtime(self, mode):
+        return types.SimpleNamespace(scanimage=self.program, summary=lambda: {}, version=lambda: 'stub',
+                                     env=lambda: dict(os.environ, STUB_MODE=mode, STUB_MARKS=str(self.marks)))
+
+    def scan(self, mode, **kw):
+        return capture.capture(self.runtime(mode), self.out, 'stub', PLAN, None, {}, {}, '', **kw)
+
+    def checked(self):
+        """The checks of the finished file passed, whatever is in it: these tests are about getting there."""
+        info = {'width': 10, 'height': 10, 'dpi_x': 75.0, 'dpi_y': 75.0, 'bits_per_channel': 16, 'channels': 3}
+        return mock.patch.multiple(capture, inspect_tiff=lambda path: info, check_tiff=lambda *a: None,
+                                   channel_health=lambda path: {'channels': {}, 'warnings': []})
+
+    def record(self):
+        return json.loads(Path(str(self.out) + '.json').read_text())
+
+    def gone(self):
+        pid = int(self.marks.read_text().split()[0].partition('=')[2])
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        return False
+
+    def test_ctrl_c_lets_scanimage_stop_the_scanner_itself(self):
+        """Ctrl-C at a terminal goes to every program in the foreground. scanimage got it, began to
+        cancel, and at once got a second signal from the kit, on which it exits in the middle."""
+        helper = textwrap.dedent(f'''
+            import os, sys, types
+            sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
+            from openfilmkit import capture
+            capture.MIN_FREE = capture.MARGIN = 0
+            capture.tiffinfo = lambda: 'tiffinfo'
+            rt = types.SimpleNamespace(scanimage={str(self.program)!r}, summary=lambda: {{}}, version=lambda: 'stub',
+                                       env=lambda: dict(os.environ, STUB_MODE='cancel', STUB_MARKS={str(self.marks)!r}))
+            try:
+                capture.capture(rt, {str(self.out)!r}, 'stub', {PLAN!r}, None, {{}}, {{}}, '', progress=open(os.devnull, 'w'))
+            except KeyboardInterrupt:
+                sys.exit(130)
+        ''')
+        at_terminal = subprocess.Popen([sys.executable, '-c', helper], start_new_session=True)
+        try:
+            for _ in range(200):
+                if self.marks.exists() and 'scanning' in self.marks.read_text():
+                    break
+                time.sleep(0.05)
+            os.killpg(at_terminal.pid, signal.SIGINT)
+            self.assertEqual(at_terminal.wait(timeout=60), 130)
+        finally:
+            if at_terminal.poll() is None:
+                at_terminal.kill()
+        self.assertEqual(self.marks.read_text().split()[1:], ['scanning', 'stopping', 'parked'])
+        self.assertEqual(self.record()['status'], 'failed_or_interrupted')
+
+    def test_a_scan_that_goes_silent_is_given_up_on(self):
+        with mock.patch.object(capture, 'STALL', 1), mock.patch.object(capture, 'LISTEN', 0.2):
+            with self.assertRaisesRegex(capture.CaptureError, 'stuck'):
+                self.scan('silent', progress=io.StringIO())
+        self.assertTrue(self.gone())
+        self.assertEqual(self.record()['status'], 'failed_or_interrupted')
+        self.assertIn('warming up', Path(str(self.out) + '.scan.log').read_text())
+
+    def test_a_display_nobody_reads_and_bytes_that_arent_text_dont_stop_a_scan(self):
+        class Closed:
+            def write(self, text):
+                raise BrokenPipeError(32, 'Broken pipe')
+        with self.checked():
+            self.assertEqual(self.scan('odd', progress=Closed())['status'], 'captured_verified')
+        log = Path(str(self.out) + '.scan.log').read_text()
+        self.assertIn('caf', log)
+        self.assertIn('Progress: 49%', log)                              # all of it is in the log all the same
+
+    def test_the_record_is_right_even_if_writing_it_fails_at_the_end(self):
+        write, calls = capture._write_record, []
+
+        def fails_once(path, record):
+            calls.append(record['status'])
+            if len(calls) == 1:
+                raise OSError(5, 'Input/output error')
+            write(path, record)
+        with self.checked(), mock.patch.object(capture, '_write_record', fails_once), self.assertRaises(OSError):
+            self.scan('fine', progress=io.StringIO())
+        self.assertEqual((self.record()['status'], self.out.exists(), Path(str(self.out) + '.partial').exists()),
+                         ('captured_verified', True, False))
+
+    def test_a_file_cut_short_is_caught_even_if_tiffinfo_lets_it_pass(self):
+        """scanimage doesn't check its writes: a disk that fills mid-scan still ends with status 0."""
+        lenient = self.root / 'tiffinfo'
+        lenient.write_text('#!/bin/sh\necho "  Image Width: 100 Image Length: 100"\necho "  Resolution: 75, 75 pixels/inch"\n'
+                           'echo "  Bits/Sample: 16"\necho "  Samples/Pixel: 3"\n[ -n "$SAYS" ] && echo "$SAYS" >&2\nexit 0\n')
+        lenient.chmod(0o755)
+        short = self.root / 'short.tif'
+        short.write_bytes(bytes(10_000))
+        whole = self.root / 'whole.tif'
+        whole.write_bytes(bytes(60_000 + 200))
+        with mock.patch.object(capture, 'tiffinfo', lambda: str(lenient)):
+            with self.assertRaisesRegex(capture.CaptureError, 'cut short'):
+                capture.inspect_tiff(short)
+            self.assertEqual(capture.inspect_tiff(whole)['width'], 100)
+            with mock.patch.dict(os.environ, {'SAYS': 'TIFFFillStrip: Read error on strip 0'}):
+                with self.assertRaisesRegex(capture.CaptureError, 'Read error'):
+                    capture.inspect_tiff(whole)
+            slow = subprocess.TimeoutExpired(['tiffinfo'], 600)
+            with mock.patch('subprocess.run', side_effect=slow), self.assertRaisesRegex(capture.CaptureError, '10 minutes'):
+                capture.inspect_tiff(whole)
+
+    def test_a_scan_whose_pixels_cant_be_read_back_has_failed(self):
+        with mock.patch.object(capture, 'inspect_tiff', lambda path: {'width': 10, 'height': 10, 'dpi_x': 75.0, 'dpi_y': 75.0}), \
+                mock.patch.object(capture, 'check_tiff', lambda *a: None):
+            with self.assertRaisesRegex(capture.CaptureError, 'read back'):
+                self.scan('fine', progress=io.StringIO())                # 2,000 zero bytes: not a TIFF at all
+        self.assertEqual((self.record()['status'], self.out.exists()), ('failed_or_interrupted', False))
+
+
 class Tiffinfo(unittest.TestCase):
     """A capture is verified with tiffinfo, so its absence is said before the scan, not after."""
     missing = RuntimeMissing('tiffinfo (libtiff) is required to verify captures')
@@ -309,6 +524,17 @@ class EndToEnd(unittest.TestCase):
             record = json.loads(Path(str(out) + '.json').read_text())
             self.assertEqual(record['plan']['geometry'], {'l': 0, 't': 0, 'x': 200, 'y': 200})
             self.assertEqual((record['tiff']['width'], record['tiff']['height']), (78, 78))
+
+    def test_no_answer_at_the_prompt_stops_the_roll_there(self):
+        small = ['--device', 'test:0', '--source', 'Flatbed', '--dpi', '75',
+                 '--scanimage-arg=-x', '--scanimage-arg=20', '--scanimage-arg=-y', '--scanimage-arg=20']
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(capture, 'MIN_FREE', 0), \
+                mock.patch.object(capture, 'MARGIN', 0), terminal(True), mock.patch('builtins.input', side_effect=EOFError):
+            path = Path(d, 'roll-01')
+            roll.create(path)
+            code, out, err = self.kit('scan', str(path), '--frames', '3', *small)     # Ctrl-D at "Position the next frame"
+            self.assertEqual(code, 0, err)
+            self.assertEqual(sorted(p.name for p in (path / 'masters').glob('*.tif')), ['frame-01.tif'])
 
     def test_doctor_json(self):
         code, out, _ = self.kit('doctor', '--json')

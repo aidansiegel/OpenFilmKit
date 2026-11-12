@@ -412,7 +412,6 @@ def cmd_job(args, out):
 
 def cmd_queue(args, out):
     from . import queues
-    import time as clock
     try:
         q = queues.queue_settings(args.name)
         if args.queue_command == 'collect':
@@ -441,7 +440,8 @@ def cmd_queue(args, out):
             extra += f" (try {row['tries']} of {queues.TRIES}; it will try again)"
         if row.get('why_waiting'):
             extra += f": no worker can take it now ({row['why_waiting']})"
-        out.say(f"  {row['id'][:12]}  {row['state']}{where}  {Path(row['photo'] or '').name} → {row['output']}{extra}")
+        what = f"{Path(row['photo'] or '').name} → {row['output']}" if row['output'] else '(no description)'
+        out.say(f"  {row['id'][:12]}  {row['state']}{where}  {what}{extra}")
     if any(row['state'] == 'failed' and row['final'] for row in info['jobs']):
         out.say('  Failed jobs stay until `queue retry` (try them again) or `queue remove --job ID`.')
     for w in info['workers']:
@@ -509,7 +509,23 @@ def film_info(args, roll_dir):
             'note': args.note or '', 'roll': base or None}
 
 
+# scanimage options the kit sets itself, from the scanner's profile and its own options: given again
+# with --scanimage-arg, the later one would win, and the record would go on stating the plan.
+OWNED = ('--mode', '--depth', '--resolution', '--source', '--format', '--device-name', '-d', '--output-file', '-o',
+         '--batch', '-b', '--dont-scan', '-n', '--all-options', '-A', '--list-devices', '-L',
+         '--formatted-device-list', '-f', '--test', '-T', '--help', '-h', '--version', '-V')
+
+
+def _ask(prompt):
+    """An answer typed at the terminal; "q" when there is none to be had (Ctrl-D, a closed terminal)."""
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return 'q'
+
+
 def cmd_scan(args, out):
+    import signal
     target = Path(args.target).expanduser().absolute()
     roll_dir = None
     if target.is_dir():
@@ -518,6 +534,15 @@ def cmd_scan(args, out):
         roll_dir = target
     elif args.frames != 1:
         raise Fail('--frames needs a roll folder, not a file name')
+    if args.frames < 1:
+        raise Fail('--frames is the number of frames to scan: 1 or more')
+    if args.dpi is not None and args.dpi <= 0:
+        raise Fail('--dpi is a resolution: a number above 0')
+    extra = args.scanimage_arg or []
+    for arg in extra:
+        if arg.split('=')[0] in OWNED or arg.startswith('--batch'):
+            raise Fail(f'--scanimage-arg {arg}: the kit sets that itself (see --dpi, --source and --device), and '
+                       'given twice the record would say one thing and the scan be another')
     if unknown_stock(args.stock):
         out.say(unknown_stock(args.stock))
     interactive = sys.stdin.isatty() and not out.as_json
@@ -539,39 +564,48 @@ def cmd_scan(args, out):
     for w in warnings + scanner['problems']:
         out.say(f'! {w}')
     estimate = scanners.estimate_bytes(options, prof, plan['dpi'], geometry=plan.get('geometry'))
-    extra = args.scanimage_arg or []
     settings = runtime.run(capture.command(runtime, name, plan, extra)[1:-2] +
                            ['--all-options', '--dont-scan']).stdout
     film = film_info(args, roll_dir)
 
+    def stop(signum, frame):   # `kill`, or the terminal closed: like Ctrl-C, so the scanner is stopped and the record says so
+        raise KeyboardInterrupt
+    before = {s: signal.signal(s, stop) for s in (getattr(signal, n, None) for n in ('SIGTERM', 'SIGHUP')) if s}
     records = []
     frame = 0
-    while frame < args.frames:
-        dest = roll.next_frame(roll_dir) if roll_dir else target
-        if frame and interactive:
-            if input('Position the next frame, then press Enter (q to stop): ').strip() == 'q':
+    try:
+        while frame < args.frames:
+            dest = roll.next_frame(roll_dir) if roll_dir else target
+            if frame and interactive:
+                if _ask('Position the next frame, then press Enter (q to stop): ') == 'q':
+                    break
+            out.say(f"Scanning {scanner['vendor']} {scanner['model']} at {plan['dpi']} dpi to {dest}")
+            try:
+                record = capture.capture(runtime, dest, name, plan, prof, scanner, film, settings,
+                                         estimate, extra, progress=sys.stderr)
+            except capture.CaptureError as e:
+                out.say(f'\nCapture failed: {e}')
+                records.append({'output': str(dest), 'status': 'failed_or_interrupted',
+                                'error': str(e)})
+                if interactive and roll_dir:
+                    choice = _ask('r to retry, s to skip, q to stop: ')
+                    if choice == 'r':
+                        records.pop()   # the frame is being scanned again: this try isn't how it ended
+                        continue
+                    if choice == 's':
+                        frame += 1
+                        continue
                 break
-        out.say(f"Scanning {scanner['vendor']} {scanner['model']} at {plan['dpi']} dpi to {dest}")
-        try:
-            record = capture.capture(runtime, dest, name, plan, prof, scanner, film, settings,
-                                     estimate, extra, progress=sys.stderr)
-        except capture.CaptureError as e:
-            out.say(f'\nCapture failed: {e}')
-            records.append({'output': str(dest), 'status': 'failed_or_interrupted',
-                            'error': str(e)})
-            if interactive and roll_dir:
-                choice = input('r to retry, s to skip, q to stop: ').strip()
-                if choice == 'r':
-                    continue
-                if choice == 's':
-                    frame += 1
-                    continue
-            break
-        out.say(f"\nSaved and verified: {dest}\nSHA-256: {record['sha256']}")
-        for w in record['channel_health']['warnings']:
-            out.say(f'! {w}')
-        records.append({k: record[k] for k in ('output', 'status', 'sha256', 'bytes', 'tiff', 'channel_health')})
-        frame += 1
+            out.say(f"\nSaved and verified: {dest}\nSHA-256: {record['sha256']}")
+            if record['channel_health'].get('error'):
+                out.say(f"! What its channels hold was not checked: {record['channel_health']['error']}")
+            for w in record['channel_health']['warnings']:
+                out.say(f'! {w}')
+            records.append({k: record[k] for k in ('output', 'status', 'sha256', 'bytes', 'tiff', 'channel_health')})
+            frame += 1
+    finally:
+        for s, handler in before.items():
+            signal.signal(s, handler)
     if frame == 1 and records and records[0]['status'] == 'captured_verified':
         out.say('Check framing, focus and exposure before scanning the rest of the roll.')
     out.result({'scanner': scanner, 'plan': plan, 'warnings': warnings, 'captures': records})

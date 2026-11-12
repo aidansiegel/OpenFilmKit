@@ -465,7 +465,7 @@ def dust_mask(img, protect=None, threshold=28, max_area_fraction=2.5e-5, smooth_
     win = (k * 2 + 1, k * 2 + 1)
 
     def smoothness(a, b):
-        bgf = bg[a:b].astype(np.float32)
+        bgf = bg[a:b].astype(np.float32)   # noqa: F821 (bg is deleted below, after this function's last call)
         around = (cv2.dilate(cand[max(0, a - 1):b + 1], np.ones((3, 3), np.uint8))[a - max(0, a - 1):][:b - a]
                   == 0).astype(np.float32)
         count = np.maximum(cv2.blur(around, win), 1e-3)

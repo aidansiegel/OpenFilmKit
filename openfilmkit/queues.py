@@ -66,7 +66,7 @@ LEASE, RENEW, SETTLE, POLL, CHECK = 600, 120, 5, 60, 15
 QUIET = 120        # seconds an rsync waits on a connection that sends nothing before giving up
 RETRY = (900, 3600)   # seconds a worker waits before its second and third tries at a job it failed
 TRIES = len(RETRY) + 1
-NAME = re.compile(r'^[A-Za-z0-9._-]+$')
+NAME = re.compile(r'^(?!\.+$)[A-Za-z0-9._-]+$')   # not "." or "..": a name is a folder in the queue
 JOB_ID = re.compile(r'^[0-9a-f]{64}$')
 SLOW_STAGES = ('scratch_probability.npz', 'fill-*.npz')   # worth pushing; the rest is quick to redo
 
@@ -102,9 +102,11 @@ def queue_settings(name=None):
     if name not in queues:
         raise QueueError(f'no queue {name!r} in {config_file()}')
     q = queues[name]
-    if 'queue' not in q:
+    if not isinstance(q, dict) or not isinstance(q.get('queue'), str) or not q['queue']:
         raise QueueError(f'[queues.{name}] needs queue = "host:path"')
-    return {'name': name, 'queue': q['queue'], 'ssh_command': q.get('ssh_command', 'ssh')}
+    if not isinstance(q.get('ssh_command', 'ssh'), str):
+        raise QueueError(f'[queues.{name}] ssh_command is text, in quotes')
+    return {'name': name, 'queue': _spec(q['queue']), 'ssh_command': q.get('ssh_command', 'ssh')}
 
 
 def _split(spec):
@@ -115,8 +117,22 @@ def _split(spec):
     return None, spec
 
 
+def _spec(spec):
+    """A queue or drop folder as the settings give it, with a leading ~/ dealt with: ssh and rsync
+    start in the home folder over there, so it is dropped (quoted for a remote `rm`, it named a
+    folder called "~" that wasn't there, and removing nothing counted as done); here it is
+    filled in, since nothing else would."""
+    host, path = _split(spec)
+    if host is None:
+        return str(Path(path).expanduser()) if path.startswith('~') else spec
+    return f'{host}:{path[2:]}' if path.startswith('~/') else spec
+
+
 def _rsync(ssh_command, *args, quiet=False):
-    argv = ['rsync', '-a', '--partial', f'--timeout={QUIET}', '-e', ssh_command, *args]
+    # -rpt, not -a: symbolic links, devices and pipes are left where they are. The queue is a shared
+    # folder, and a link planted there (a job's out/ pointing at a folder on the worker, say) would
+    # otherwise be brought over and followed.
+    argv = ['rsync', '-rpt', '--partial', f'--timeout={QUIET}', '-e', ssh_command, *args]
     r = subprocess.run(argv, stdout=subprocess.DEVNULL if quiet else None,
                        stderr=subprocess.DEVNULL if quiet else None)
     return r.returncode == 0
@@ -140,6 +156,32 @@ def _write_json(path, data):
     os.replace(tmp, path)
 
 
+# What's read from the queue was written by other machines: each file is taken for what it should
+# be only if it has that shape, so that one odd file can't stop every worker and every command.
+def _dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _dicts(value):
+    return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
+
+
+def _numbers(record, **defaults):
+    """`record` with each of these keys a number: its own, or the default where it's anything else."""
+    for key, default in defaults.items():
+        if isinstance(record.get(key), bool) or not isinstance(record.get(key), (int, float)):
+            record[key] = default
+    return record
+
+
+def _a_job(data):
+    """Whether a job.json's content has the shape of one, as far as the queue reads it."""
+    job, about = _dict(data).get('job'), _dict(data).get('about')
+    return (isinstance(job, dict) and isinstance(about, dict) and isinstance(job.get('options', {}), dict)
+            and isinstance(job.get('input'), dict) and isinstance(about.get('packed_utc', ''), str)
+            and isinstance(about.get('megapixels') or 0, (int, float)))
+
+
 # ---------------------------------------------------------------- what the queue holds
 
 class View:
@@ -151,38 +193,45 @@ class View:
         self.drops = []   # every worker with a drop folder
         self.rejected = {}   # {job: [(worker, when that run finished)]}
         self.retried = {}    # {job: [(worker, when it failed)]}: failures `queue retry` set aside
-        for p in sorted((folder / 'jobs').glob('*/job.json')):
-            data = _read_json(p)
-            if data and JOB_ID.match(p.parent.name):
-                self.jobs[p.parent.name] = (data['job'], data['about'])
-                turned_down = _read_json(p.parent / 'rejected.json') or []
-                self.rejected[p.parent.name] = [(r.get('worker'), r.get('finished_utc')) for r in turned_down]
-                set_aside = _read_json(p.parent / 'retry.json') or []
-                self.retried[p.parent.name] = [(r.get('worker'), r.get('at')) for r in set_aside]
+        # Whether there is a queue here at all (an empty folder where one should be, its drive not
+        # mounted, has no jobs/), and every job folder in it, with a job.json that can be read or not
+        # (cut short in an upload, say): a job is gone only when its folder is.
+        self.there, self.present = (folder / 'jobs').is_dir(), set()
+        for p in sorted((folder / 'jobs').glob('*')):
+            if not (JOB_ID.match(p.name) and p.is_dir()):
+                continue
+            self.present.add(p.name)
+            data = _read_json(p / 'job.json')
+            if _a_job(data):
+                self.jobs[p.name] = (data['job'], data['about'])
+                turned_down = _dicts(_read_json(p / 'rejected.json'))
+                self.rejected[p.name] = [(r.get('worker'), r.get('finished_utc')) for r in turned_down]
+                set_aside = _dicts(_read_json(p / 'retry.json'))
+                self.retried[p.name] = [(r.get('worker'), r.get('at')) for r in set_aside]
         self.mine = {}       # {worker: {kind: [job]}}: what each drop folder holds
         for w in sorted((folder / 'drop').glob('*')):
             if not NAME.match(w.name):
                 continue
             self.drops.append(w.name)
-            info = _read_json(w / 'worker.json')
+            info = _dict(_read_json(w / 'worker.json'))
             if info:
-                self.workers[w.name] = info
+                self.workers[w.name] = _numbers(info, seen=0, memory_gb=0)
             for p in (w / 'leases').glob('*.json'):
-                lease = _read_json(p)
+                lease = _dict(_read_json(p))
                 if lease:
-                    self.leases.setdefault(p.stem, []).append(dict(lease, worker=w.name))
+                    self.leases.setdefault(p.stem, []).append(dict(_numbers(lease, until=0, claimed=0), worker=w.name))
             held = self.mine.setdefault(w.name, {'results': [], 'checkpoints': [], 'failed': [], 'rejected': [],
                                                  'retried': []})
             for p in (w / 'results').glob('*/out/*.json'):
                 jid = p.parent.parent.name
                 held['results'].append(jid)
-                recipe = _read_json(p) or {}
-                if (w.name, recipe.get('job', {}).get('finished_utc')) in self.rejected.get(jid, []):
+                recipe = _dict(_read_json(p))
+                if (w.name, _dict(recipe.get('job')).get('finished_utc')) in self.rejected.get(jid, []):
                     held['rejected'].append(jid)
                 else:
                     self.results.setdefault(jid, []).append(w.name)
             for p in (w / 'failed').glob('*/why.json'):
-                jid, why = p.parent.name, _read_json(p) or {}
+                jid, why = p.parent.name, _numbers(_dict(_read_json(p)), at=0, tries=1)
                 held['failed'].append(jid)
                 if (w.name, why.get('at')) in self.retried.get(jid, []):
                     held['retried'].append(jid)
@@ -229,6 +278,13 @@ def outbox(q):
     return _cache() / 'queues' / q['name'] / 'outbox'
 
 
+def elsewhere(q):
+    """Where the descriptions of jobs packed on other machines are fetched to, for `collect --to`.
+    Never the outbox: a job with a package there counts as packed here, and its results go
+    where its own job.json says."""
+    return _cache() / 'queues' / q['name'] / 'elsewhere'
+
+
 def _remote(q, *command, quiet=False):
     """Run a command in the queue's machine (or here, for a local queue)."""
     host, _ = _split(q['queue'])
@@ -243,7 +299,7 @@ def _path(q, *parts):
 def _free_bytes(q):
     """Free space where the queue is, or None if it can't be read."""
     host, path = _split(q['queue'])
-    command = ['df', '-Pk', path]
+    command = ['df', '-Pk', '--', path]
     try:
         if host is None:
             out = subprocess.run(command, capture_output=True, text=True).stdout
@@ -260,7 +316,7 @@ SPARE = 2 * 1024 ** 3   # what submitting leaves free on the queue's machine
 
 def submit(q, packages, say=print):
     """Put local job packages into the queue, if they fit on its machine with SPARE left over."""
-    if not _remote(q, 'mkdir', '-p', _path(q, 'jobs'), _path(q, 'drop')):
+    if not _remote(q, 'mkdir', '-p', '--', _path(q, 'jobs'), _path(q, 'drop')):
         raise QueueError(f"couldn't reach the queue at {q['queue']}")
     need = sum(f.stat().st_size for p in packages for f in Path(p).rglob('*') if f.is_file())
     free = _free_bytes(q)
@@ -299,6 +355,10 @@ def status(q, now=None):
         else:
             row['state'] = 'waiting'
         rows.append(row)
+    for jid in sorted(view.present - set(view.jobs)):
+        rows.append({'id': jid, 'photo': None, 'output': None, 'memory_gb': None, 'version': None, 'state': 'damaged',
+                     'error': "its job.json is missing or can't be read (an upload cut short?): queue the photo "
+                              'again, or take this out with `queue remove`'})
     workers = [dict(info, name=name, seen_ago_s=round(now - info.get('seen', 0))) for name, info in view.workers.items()]
     for w in workers:   # a worker at work reports at least every RENEW seconds, an idle one every `poll`
         w['silent'] = w['seen_ago_s'] > LEASE
@@ -357,19 +417,23 @@ def _note(q, jid, name, data):
 def _clear(q, view, jid):
     """Take a job out of the queue: its package, the workers' files for it where they can be
     deleted from here (otherwise each worker clears its own), and the package kept here."""
-    gone = _remote(q, 'rm', '-rf', '--', _path(q, 'jobs', jid))
+    if not _remote(q, 'rm', '-rf', '--', _path(q, 'jobs', jid)):
+        # Still queued, then: its result stays with it (or a worker would only do it again), and so
+        # does what's kept here, which is what says the job is ours.
+        return False
     paths = [_path(q, 'drop', w, sub, jid) for w in view.drops for sub in ('results', 'checkpoints', 'failed')]
     if paths:
         _remote(q, 'rm', '-rf', '--', *paths, quiet=True)
-    shutil.rmtree(outbox(q) / jid, ignore_errors=True)
-    return gone
+    for kept in (outbox(q), elsewhere(q), _cache() / 'queues' / q['name'] / 'notes'):
+        shutil.rmtree(kept / jid, ignore_errors=True)
+    return True
 
 
 def _named(view, wanted):
     """The jobs in the queue that `wanted` names, each by its ID or the start of it."""
     out = []
     for start in wanted:
-        match = [jid for jid in view.jobs if start and jid.startswith(start.lower())]
+        match = [jid for jid in sorted(view.present) if start and jid.startswith(start.lower())]
         if len(match) != 1:
             raise QueueError(f'several jobs start with {start!r}: give more of the ID' if match
                              else f'no job in the queue starts with {start!r}')
@@ -404,7 +468,7 @@ def remove(q, wanted, say=print):
     for jid in chosen:
         if not _clear(q, view, jid):
             raise QueueError(f"couldn't remove job {jid[:12]} from {q['queue']}")
-        say(f"{jid[:12]}: removed ({Path(view.jobs[jid][1].get('source') or '?').name})")
+        say(f"{jid[:12]}: removed ({Path(view.jobs[jid][1].get('source') or '?').name if jid in view.jobs else '?'})")
     return chosen
 
 
@@ -424,6 +488,7 @@ def collect(q, to=None, say=print):
             if to is None:
                 out.append({'id': jid, 'error': 'packed on another machine: collect it with --to DIR'})
                 continue
+            package = elsewhere(q) / jid
             (package / 'out').mkdir(parents=True, exist_ok=True)
             _rsync(q['ssh_command'], f"{q['queue'].rstrip('/')}/jobs/{jid}/job.json", f'{package}/', quiet=True)
         try:
@@ -431,32 +496,45 @@ def collect(q, to=None, say=print):
         except jobs.JobError as e:
             out.append({'id': jid, 'error': str(e)})
             continue
-        record = None
+        record, unfetched = None, []
         for worker in view.results[jid]:
             shutil.rmtree(package / 'out', ignore_errors=True)
             (package / 'out').mkdir(parents=True)
             src = f"{q['queue'].rstrip('/')}/drop/{worker}/results/{jid}/out/"
-            got = _rsync(q['ssh_command'], src, f'{package}/out/', quiet=True)
-            candidate = jobs.done(package) if got else None
-            if candidate and candidate.get('job', {}).get('id') == jid \
-                    and candidate.get('source_sha256') == view.jobs[jid][0]['input']['sha256']:
+            if not _rsync(q['ssh_command'], src, f'{package}/out/', quiet=True):
+                unfetched.append(worker)   # a dropped connection says nothing about the result: it is left alone
+                continue
+            candidate = jobs.done(package)
+            if candidate and _dict(candidate.get('job')).get('id') == jid \
+                    and candidate.get('source_sha256') == view.jobs[jid][0]['input'].get('sha256'):
                 record = candidate
                 break
             say(f'{jid[:12]}: the result from {worker} does not check out; turning it down')
             if not _remote(q, 'rm', '-rf', '--', _path(q, 'drop', worker, 'results', jid), quiet=True):
                 _reject(q, view, jid, worker, package)
         if record is None:
-            out.append({'id': jid, 'error': 'no result checked out; the job is free to run again'})
+            out.append({'id': jid, 'error': f"couldn't fetch the result from {' or '.join(unfetched)}; collect again"
+                        if unfetched else 'no result checked out; the job is free to run again'})
             continue
         try:
             records = jobs.collect(package, to)   # one per destination
-        except jobs.JobError as e:
+        except (jobs.JobError, OSError) as e:    # one job's trouble (a folder that can't be written): on to the next
             out.append({'id': jid, 'error': str(e)})
             continue
-        _clear(q, view, jid)
+        if not _clear(q, view, jid):
+            say(f"{jid[:12]}: collected, but couldn't be cleared from {q['queue']}; collecting again will clear it")
         for record in records:
             say(f"{jid[:12]}: {record['output']} (from {record.get('job', {}).get('ran_on')})")
         out += records
+    if view.there and box.is_dir():
+        # A finished package kept here for a job the queue no longer holds: collected before, when clearing
+        # it reported a failure that wasn't one (the answer was lost). It holds a copy of the photo.
+        for package in box.glob('*'):
+            try:
+                if JOB_ID.match(package.name) and package.name not in view.present and jobs.done(package):
+                    shutil.rmtree(package, ignore_errors=True)
+            except jobs.JobError:
+                pass
     return out
 
 
@@ -478,7 +556,8 @@ def worker_settings(**given):
             raise QueueError(f'the worker setting {key} is text, in quotes: not {s[key]!r}')
     if not NAME.match(s['name']):
         raise QueueError(f'worker names use letters, digits, ".", "_" and "-": {s["name"]!r}')
-    s.setdefault('drop', f"{s['queue'].rstrip('/')}/drop/{s['name']}")
+    s['queue'] = _spec(s['queue'])
+    s['drop'] = _spec(s['drop']) if isinstance(s.get('drop'), str) else f"{s['queue'].rstrip('/')}/drop/{s['name']}"
     s['state'] = Path(s.get('state') or _cache() / 'worker')
     for key, least in (('memory_gb', None), ('yield_mb', 0), ('lease', 0), ('renew', 0), ('settle', 0), ('poll', 0),
                        ('check', 0)):
@@ -621,14 +700,16 @@ class Worker:
 
     # -- writing to the drop folder
     def _push(self):
-        ok = _rsync(self.s['ssh_command'], '--exclude=.*', '--exclude=/results/', f'{self.mirror}/',
+        # Only this code's own half-written files (.NAME.PID.tmp) are held back. Every name with a dot
+        # in front was, and a result called .hidden-clean-v1.png was never published, the job redone for good.
+        ok = _rsync(self.s['ssh_command'], '--exclude=.*.tmp', '--exclude=/results/', f'{self.mirror}/',
                     f"{self.s['drop']}/", quiet=True)
         # A result always replaces what's there: a redone one can match a turned-down one in size
         # and (to the second) in time, which rsync would otherwise take for the same file.
         (self.mirror / 'results').mkdir(parents=True, exist_ok=True)
-        ok &= _rsync(self.s['ssh_command'], '--ignore-times', '--exclude=.*', f'{self.mirror}/results/',
+        ok &= _rsync(self.s['ssh_command'], '--ignore-times', '--exclude=.*.tmp', f'{self.mirror}/results/',
                      f"{self.s['drop']}/results/", quiet=True)
-        ok &= _rsync(self.s['ssh_command'], '--delete', '--exclude=.*', f'{self.mirror}/leases/',
+        ok &= _rsync(self.s['ssh_command'], '--delete', '--exclude=.*.tmp', f'{self.mirror}/leases/',
                      f"{self.s['drop']}/leases/", quiet=True)
         self._pushed = ok
         return ok
@@ -685,13 +766,17 @@ class Worker:
         its results that collecting turned down and of its failures that `queue retry` set aside,
         and first its own copies of them here: the next push would put a copy left in the mirror
         back, and a job's package holds its photo."""
+        if not view.there:
+            # No queue to be seen (a local one whose drive isn't mounted leaves an empty folder): that is
+            # not its jobs having been collected, and a finished result still to be pushed must stay.
+            return
         held = view.mine.get(self.s['name'], {})
         gone = {jid for kind in ('results', 'checkpoints', 'failed') for jid in held.get(kind, [])
-                if jid not in view.jobs}
+                if jid not in view.present}
         refused, retried = set(held.get('rejected', [])), set(held.get('retried', []))
         for folder in (self.mirror / 'results', self.mirror / 'checkpoints', self.mirror / 'failed', self.state / 'jobs'):
             for p in folder.glob('*'):
-                if JOB_ID.match(p.name) and p.name not in view.jobs:
+                if JOB_ID.match(p.name) and p.name not in view.present:
                     shutil.rmtree(p, ignore_errors=True)
         for jid in refused:
             shutil.rmtree(self.mirror / 'results' / jid, ignore_errors=True)
@@ -702,11 +787,14 @@ class Worker:
                 self._empty(kind, jid)
 
     def _empty(self, kind, jid):
-        """Empty drop/<kind>/<jid>/ (syncing an empty folder into it works with every rsync; the
-        empty folder left behind counts for nothing)."""
+        """Take drop/<kind>/<jid>/ away: emptied by syncing an empty folder into it (which works with
+        every rsync), then removed through its parent. Left there empty, a checkpoints folder still
+        counted as held, was emptied again at every look, and made a job queued again show as stopped."""
         empty = self.state / 'empty'
         empty.mkdir(parents=True, exist_ok=True)
         _rsync(self.s['ssh_command'], '-r', '--delete', f'{empty}/', f"{self.s['drop']}/{kind}/{jid}/", quiet=True)
+        _rsync(self.s['ssh_command'], '--delete', f'--include=/{jid}/', '--exclude=*', f'{empty}/',
+               f"{self.s['drop']}/{kind}/", quiet=True)
 
     def _lease(self, jid, claimed=None):
         now = self.now()
@@ -760,6 +848,7 @@ class Worker:
             into.mkdir(parents=True, exist_ok=True)
             for f in best.glob('*.npz'):
                 shutil.copyfile(f, into / f.name)
+        shutil.rmtree(self.state / 'seed', ignore_errors=True)
 
     def do(self, jid, view):
         package = self.state / 'jobs' / jid

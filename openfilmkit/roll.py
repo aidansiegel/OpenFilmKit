@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 FILM_TYPES = ('color-negative', 'bw-negative', 'slide', 'unknown')
-FRAME = re.compile(r'^frame-(\d+)\.tif')
+FRAME = re.compile(r'^frame-(\d+)\.tif', re.I)   # FRAME-04.TIF takes its number too: on most drives it is the same name
 
 
 class RollError(Exception):
@@ -40,9 +40,12 @@ def create(path, film='unknown', stock='', year=None, note=''):
 def load(path):
     file = Path(path) / 'roll.json'
     try:
-        return json.loads(file.read_text())
+        record = json.loads(file.read_text())
     except ValueError as e:
         raise RollError(f'{file} is damaged ({e})') from e
+    if not isinstance(record, dict):
+        raise RollError(f"{file} is damaged (it doesn't hold a roll's record)")
+    return record
 
 
 def set_choice(path, choice):
@@ -81,7 +84,7 @@ def next_derived(path, stem, suffix='.jpg'):
 def next_frame(path):
     """The next unused masters/frame-NN.tif, counting failed attempts too."""
     masters = Path(path) / 'masters'
-    numbers = [int(m.group(1)) for p in masters.glob('frame-*')
+    numbers = [int(m.group(1)) for p in masters.glob('*')
                if (m := FRAME.match(p.name))]
     n = max(numbers, default=0) + 1
     return masters / f'frame-{n:02d}.tif'

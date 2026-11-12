@@ -96,8 +96,22 @@ def _now():
 def _write_json(path, data):
     """Write JSON under a temporary name, then rename: readers see the old file or the new one."""
     tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
-    tmp.write_text(json.dumps(data, indent=2) + '\n')
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(json.dumps(data, indent=2) + '\n')
+        os.replace(tmp, path)
+    finally:
+        _discard(tmp)
+
+
+def _discard(path):
+    """Remove a file this run made, if it's there; once more if stopped in the act (Ctrl-C can land anywhere)."""
+    try:
+        path.unlink(missing_ok=True)
+    except KeyboardInterrupt:
+        path.unlink(missing_ok=True)
+        raise
+    except OSError:
+        pass
 
 
 def _copy(src, dest):
@@ -182,14 +196,16 @@ def local_checkpoints(job):
     cutoff = datetime.datetime.now().timestamp() - CHECKPOINT_DAYS * 86400
     if base.is_dir():
         for old in base.iterdir():
-            try:
-                if old.is_dir() and old.stat().st_mtime < cutoff:
+            try:   # folders named as these are, and no others: the cache can be set to any folder (OPENFILMKIT_CACHE)
+                if ID.fullmatch(old.name) and old.is_dir() and old.stat().st_mtime < cutoff:
                     shutil.rmtree(old, ignore_errors=True)
             except OSError:
                 pass
     return base / job_id(job)
 
 
+SUFFIXES = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')   # the kinds of file a job makes (clean.OUTPUTS)
+ID = re.compile(r'[0-9a-f]{64}')
 PACKING = re.compile(r'\.[0-9a-f]{64}\.\d+\.packing')   # a package being made: .<job ID>.<process>.packing
 STALE = 86400
 
@@ -231,8 +247,10 @@ def _write_package(into, job, about, files):
         if sha(tmp / 'input' / about['input_name']) != job['input']['sha256']:
             raise JobError('the input changed while it was being packed')
         _write_json(tmp / 'job.json', {'job': job, 'about': about})
-    except BaseException:   # a full disk, Ctrl-C: nothing half-made stays behind with its copy of the photo
+    except BaseException as e:   # a full disk, Ctrl-C: nothing half-made stays behind with its copy of the photo
         shutil.rmtree(tmp, ignore_errors=True)
+        if isinstance(e, OSError):
+            raise JobError(f"couldn't make the package in {into}: {e.strerror or e}") from e
         raise
     try:
         os.rename(tmp, dest)
@@ -249,8 +267,18 @@ def read(package):
     try:
         data = json.loads((package / 'job.json').read_text())
         job, about = data['job'], data['about']
-    except (OSError, ValueError, KeyError) as e:
+    except (OSError, ValueError, KeyError, TypeError) as e:
         raise JobError(f'{package} is not a job package: {e}') from e
+    # A package can come from another machine, through a shared folder: its job.json is taken for one
+    # only in the shape of one, so that what reads it later meets no surprise.
+    places = about.get('destinations', []) if isinstance(about, dict) else None
+    if not (isinstance(job, dict) and isinstance(about, dict) and isinstance(places, list)
+            and all(isinstance(d, dict) and isinstance(d.get('source'), str) for d in places)
+            and (places or isinstance(about.get('source'), str))
+            and isinstance(job.get('options'), dict) and isinstance(job.get('models'), dict)
+            and isinstance(job.get('input'), dict) and isinstance(job['input'].get('sha256'), str)
+            and isinstance(job.get('command'), str) and isinstance(job.get('openfilmkit'), str)):
+        raise JobError(f'{package} is not a job package: its job.json is not in the shape of one')
     if job.get('format') != FORMAT:
         raise JobError(f'{package}: package format {job.get("format")}; this OpenFilmKit reads {FORMAT}')
     if package.name != job_id(job):
@@ -259,8 +287,11 @@ def read(package):
     names += [d.get('output_name') for d in about.get('destinations', [])]
     if not all(plain_name(n) for n in names):
         raise JobError(f'{package}: job.json names a file outside the package')
-    if any(Path(n).suffix.lower() != job.get('output_suffix') for n in names[1:]):
-        raise JobError(f'{package}: job.json asks for an output of another kind than the job makes')
+    if job.get('output_suffix') not in SUFFIXES or any(Path(n).suffix.lower() != job['output_suffix'] for n in names[1:]):
+        raise JobError(f'{package}: job.json asks for an output of another kind than a job makes')
+    for part in (package / 'input', package / 'input' / about['input_name'], package / 'out', package / 'work'):
+        if part.is_symlink():   # it would be read, written into or cleared wherever it points
+            raise JobError(f'{package}: {part.name} is a symbolic link; a package holds its own files')
     return job, about
 
 
@@ -307,8 +338,8 @@ def run(package, say=None):
     tmp = package / 'work' / f'run-{socket.gethostname()}-{os.getpid()}'
     if tmp.exists():
         shutil.rmtree(tmp)
-    tmp.mkdir(parents=True)
     try:
+        tmp.mkdir(parents=True)
         produced = tmp / about['output_name']
         record = clean.clean(source, produced, say=say, checkpoints=package / 'work' / 'checkpoints',
                              **job['options'])
@@ -322,9 +353,11 @@ def run(package, say=None):
         shutil.rmtree(package / 'work' / 'checkpoints', ignore_errors=True)
     except clean.CleanError as e:
         # The photo or the options, so the same again next time; except a model that couldn't be
-        # fetched, which another try may get.
-        fetching = isinstance(e.__cause__, models.ModelError)
-        raise (JobError if fetching else AlwaysFails)(str(e)) from e
+        # fetched or a result that couldn't be written (a full disk), which another try may get past.
+        passing = isinstance(e, clean.CantWrite) or isinstance(e.__cause__, models.ModelError)
+        raise (JobError if passing else AlwaysFails)(str(e)) from e
+    except OSError as e:   # no room, say: another try may have it
+        raise JobError(f"couldn't write in {package}: {e.strerror or e}") from e
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return record
@@ -333,11 +366,39 @@ def run(package, say=None):
 NUMBERED = re.compile(r'(.*-clean-v)(\d+)')   # the names clean gives its copies (clean.default_output)
 
 
+def _recipe_sha(dest):
+    """The checksum the recipe beside `dest` gives for it, or None (no recipe, or not one)."""
+    try:
+        return json.loads(Path(str(dest) + '.json').read_text()).get('output_sha256')
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _taken(dest, digest):
+    """Whether the name `dest` belongs to something other than this result: a different file, or
+    a recipe with no file (the notes on one that was moved away: not to be replaced either)."""
+    if dest.exists():
+        return sha(dest) != digest
+    return Path(str(dest) + '.json').exists()
+
+
+def _place(tmp, dest):
+    """Give `tmp` the name `dest`, never replacing a file put there since the name was found free:
+    by a hard link, which fails if the name is taken; where the file system has none (exFAT), the
+    name is looked at again and then taken."""
+    try:
+        os.link(tmp, dest)
+    except OSError as e:
+        if isinstance(e, FileExistsError) or dest.exists():
+            raise JobError(f'{dest} appeared while this was being collected; collect again') from None
+        os.replace(tmp, dest)
+
+
 def _free(dest, digest):
     """`dest`, or where a different file has that name and it is one of clean's numbered names,
     the first number from there on that is free or holds this result already: the number was
     picked when the job was packed, and another copy can have taken it since."""
-    while dest.exists() and sha(dest) != digest:
+    while _taken(dest, digest):
         numbered = NUMBERED.fullmatch(dest.stem)
         if not numbered:
             raise JobError(f'refusing to replace {dest}, a different file')
@@ -366,14 +427,34 @@ def collect(package, to=None):
                            'the result is kept until it is, or collect with --to DIR')
         planned.append((d, folder, _free(folder / d['output_name'], record['output_sha256'])))
     written = []
+    digest = record['output_sha256']
     for d, folder, dest in planned:
         folder.mkdir(parents=True, exist_ok=True)   # one named with --to may be new
-        if not dest.exists():
-            tmp = dest.with_name(f'.{dest.name}.{os.getpid()}.tmp')
-            shutil.copyfile(_result(package, about), tmp)
-            os.replace(tmp, dest)
+        tmp, there = dest.with_name(f'.{dest.name}.{os.getpid()}.tmp'), dest.exists()
         mine = dict(record, source=d['source'], output=str(dest))
-        _write_json(Path(str(dest) + '.json'), mine)
+        try:
+            if there:
+                if sha(dest) != digest:   # put there since the names were looked at, above
+                    raise JobError(f'{dest} appeared while this was being collected; collect again')
+            else:
+                shutil.copyfile(_result(package, about), tmp)
+                _place(tmp, dest)
+            if _recipe_sha(dest) != digest:   # one already there for this result is left: it may have been added to
+                _write_json(Path(str(dest) + '.json'), mine)
+        except BaseException as e:
+            # Stopped, or out of room, between the file and its recipe: a file this call placed (told by its
+            # link to the copy, or its checksum) is taken away again, so nothing is left that only looks done.
+            try:
+                placed = not there and dest.exists() and (os.path.samefile(tmp, dest) if tmp.exists() else sha(dest) == digest)
+            except OSError:
+                placed = False
+            if placed and _recipe_sha(dest) != digest:
+                _discard(dest)
+            if isinstance(e, OSError):
+                raise JobError(f"couldn't write the result in {folder}: {e.strerror or e}") from e
+            raise
+        finally:
+            _discard(tmp)
         written.append(mine)
     return written
 

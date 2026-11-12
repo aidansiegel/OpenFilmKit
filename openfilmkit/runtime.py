@@ -83,7 +83,7 @@ class Runtime:
 
     def summary(self):
         p = self.provenance
-        return {'prefix': str(self.prefix), 'commit': p.get('commit'),
+        return {'prefix': str(self.prefix), 'config': self.config.name, 'commit': p.get('commit'),
                 'patches': [x['file'] for x in p.get('patches', [])],
                 'backends': p.get('backends'), 'tests': p.get('tests'),
                 'built_utc': p.get('built_utc')}

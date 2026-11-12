@@ -10,7 +10,7 @@ kit's, and roll choices come from the roll folder's roll.json. Each conversion r
 hold (see health.py), so a clamped or stretched channel is reported, not silently converted.
 """
 from pathlib import Path
-import datetime,hashlib,json,math,struct
+import datetime,hashlib,json,math,os,struct
 import numpy as np
 import tifffile
 from PIL import Image,ImageCms
@@ -214,23 +214,37 @@ def convert(args,root=film_stocks.DATA):
     else:lut=slide_lut(model,lo,hi) if film=='slide' else make_lut(model,lo,hi)
     stride=1 if args.max_side==0 else max(1,math.ceil(max(area.shape[:2])/args.max_side));hh,ww=-(-area.shape[0]//stride),-(-area.shape[1]//stride)
     dest.parent.mkdir(parents=True,exist_ok=True)
-    pixels=np.memmap(scratch,mode='w+',dtype='uint16' if deep else 'uint8',shape=(hh,ww,3))
+    # The picture, its LUT and its recipe are each written under another name and given their own only once all are
+    # whole, the recipe last. A run stopped partway (Ctrl-C, a full disk) then leaves nothing; it used to leave files
+    # that looked finished, with no recipe, which the same command again refused to replace.
+    tag=f'.{os.getpid()}.tmp';made={dest:dest.with_name(f'.{dest.stem}{tag}{dest.suffix}'),lutfile:lutfile.with_name(f'.{lutfile.stem}{tag}.npy'),recipe:recipe.with_name(f'.{recipe.name}{tag}')};placed=[]
     try:
-        for start in range(0,hh,64):
-            strip=shrink(area[start*stride:(start+64)*stride],stride)
-            if calibrated:
-                if args.warmth:raise ValueError('Use neutral scene anchors instead of warmth with density calibration.')
-                pixels[start:start+64]=film_density.render_density(strip,lut,args.contrast,args.gamma,calibrated['recover_clipped_blue'],top)
-            else:pixels[start:start+64]=render(strip,lut,args.contrast,args.gamma,args.warmth,top)
-        pixels.flush();icc=srgb_icc()
-        if deep:write_tiff(dest,pixels,icc)
-        else:
-            im=Image.fromarray(pixels);im.save(dest,icc_profile=icc,**({'quality':95,'subsampling':0} if dest.suffix.lower()!='.png' else {}));del im
-    finally:
-        del pixels;scratch.unlink(missing_ok=True)
-    np.save(lutfile,lut)
-    record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,output_dimensions=[ww,hh],source_dimensions=[w,h],downscale=dict(method='block average',block=stride) if stride>1 else None,channel_health=health,output=str(dest),output_sha256=sha(dest),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(lutfile),raw_tiffs_modified=False,approved=False)
-    if calibrated:record['density_calibration']=calibrated
-    if sha(source)!=digest:raise RuntimeError('Source checksum changed during conversion.')
-    recipe.write_text(json.dumps(record,indent=2)+'\n')
+        pixels=np.memmap(scratch,mode='w+',dtype='uint16' if deep else 'uint8',shape=(hh,ww,3))
+        try:
+            for start in range(0,hh,64):
+                strip=shrink(area[start*stride:(start+64)*stride],stride)
+                if calibrated:
+                    if args.warmth:raise ValueError('Use neutral scene anchors instead of warmth with density calibration.')
+                    pixels[start:start+64]=film_density.render_density(strip,lut,args.contrast,args.gamma,calibrated['recover_clipped_blue'],top)
+                else:pixels[start:start+64]=render(strip,lut,args.contrast,args.gamma,args.warmth,top)
+            pixels.flush();icc=srgb_icc()
+            if deep:write_tiff(made[dest],pixels,icc)
+            else:
+                im=Image.fromarray(pixels);im.save(made[dest],icc_profile=icc,**({'quality':95,'subsampling':0} if dest.suffix.lower()!='.png' else {}));del im
+        finally:
+            del pixels;scratch.unlink(missing_ok=True)
+        np.save(made[lutfile],lut)
+        record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,output_dimensions=[ww,hh],source_dimensions=[w,h],downscale=dict(method='block average',block=stride) if stride>1 else None,channel_health=health,output=str(dest),output_sha256=sha(made[dest]),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(made[lutfile]),raw_tiffs_modified=False,approved=False)
+        if calibrated:record['density_calibration']=calibrated
+        if sha(source)!=digest:raise ValueError('Source checksum changed during conversion.')
+        made[recipe].write_text(json.dumps(record,indent=2)+'\n')
+        for final,part in made.items():   # the picture, the LUT, then the recipe
+            if final.exists():raise ValueError('Refusing to overwrite '+str(final))
+            placed.append(final);part.replace(final)   # noted first: stopped just after the rename, it is still this run's to take away
+    except BaseException as e:
+        for leftover in (*placed,*made.values(),scratch):
+            try:leftover.unlink(missing_ok=True)
+            except OSError:pass
+        if isinstance(e,OSError):raise ValueError(f"couldn't write the conversion in {dest.parent}: {e.strerror or e}") from e
+        raise
     return record

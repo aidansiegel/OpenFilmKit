@@ -43,6 +43,13 @@ Every command takes `--json`. Masters are never changed; every conversion and cl
 recipe beside it that says exactly how it was made.
 
 - `scan --full-area` scans the driver's whole area instead of its default selection.
+- Ctrl-C during a scan tells the scanner program once and gives it half a minute to cancel and
+  park the scanner. A scan that says nothing and writes nothing for 15 minutes is given up on.
+  Either way the partial file and a record of what happened are kept, and the next scan takes the
+  next frame number.
+- A command stopped partway, or one that runs out of disk, leaves nothing behind that looks
+  finished: `convert` and `clean` write under temporary names and rename at the end, the recipe
+  last. The same command again then works.
 - `scan` and `convert` also look at what each channel of the scan holds, and say so if one is
   clamped at 0 or at full scale (detail lost there) or never uses many of the codes in its range
   (stretched digitally, so fewer real levels than 16 bits). A file can pass every structural check

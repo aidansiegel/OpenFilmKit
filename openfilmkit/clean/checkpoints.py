@@ -79,9 +79,14 @@ class Checkpoints:
                 'arrays': list(arrays), 'packed': packed}
         path = self._path(stage)
         tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
-        with open(tmp, 'wb') as f:
-            np.savez(f, _meta=np.array(json.dumps(meta)), **stored)
-        os.replace(tmp, path)
+        try:
+            with open(tmp, 'wb') as f:
+                np.savez(f, _meta=np.array(json.dumps(meta)), **stored)
+            os.replace(tmp, path)
+        except OSError:
+            # No room for it, say. A checkpoint only spares a later run some work: this run goes on
+            # without it rather than stop for want of it.
+            tmp.unlink(missing_ok=True)
 
     def journal(self, prefix):
         """A Journal of numbered entries named prefix-000000.npz, ... (see fill_damage)."""

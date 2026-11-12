@@ -35,6 +35,14 @@ ui = ["textual>=8",
       "textual-image>=0.14; python_version >= '3.12'", "pillow>=12.1; python_version >= '3.12'",
       "textual-image>=0.12,<0.13; python_version < '3.12'"]
 
+[tool.ruff]
+extend-exclude = ["build"]
+
+[tool.ruff.lint]
+# Pyflakes's checks only: names that aren't defined, imports and variables never used. A slip of that
+# kind in a branch no test reaches otherwise shows up as a traceback in someone's run.
+select = ["F"]
+
 [project.urls]
 Homepage = "https://github.com/aidansiegel/OpenFilmKit"
 

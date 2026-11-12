@@ -193,6 +193,194 @@ class Queue(unittest.TestCase):
         self.assertGreater(beats.count(jid), 1)                             # claimed, then renewed
         self.assertEqual([r['state'] for r in queues.status(self.q)['jobs'] if r['id'] == jid], ['done'])
 
+    def test_a_result_that_couldnt_be_fetched_is_left_for_the_next_collect(self):
+        """A dropped connection was taken for a result that didn't check out: a good result was
+        deleted, and the worker did the job again."""
+        self.queue_photos()
+        w = self.worker('w1')
+        w.once(), w.once()
+        real = queues._rsync
+
+        def dropped(ssh_command, *args, **kw):
+            return False if '/results/' in args[-2] else real(ssh_command, *args, **kw)
+        with mock.patch.object(queues, '_rsync', dropped):
+            code, recs = self.ofk('queue', 'collect')
+        self.assertEqual((code, ["couldn't fetch" in r.get('error', '') for r in recs]), (1, [True, True]))
+        self.assertEqual(len([p for p in (self.queue / 'drop' / 'w1' / 'results').rglob('*.png')]), 2)
+        self.assertEqual(self.states(), ['done', 'done'])
+        code, recs = self.ofk('queue', 'collect')
+        self.assertEqual((code, len(recs), queues.status(self.q)['jobs']), (0, 2, []))
+
+    def test_links_planted_in_the_queue_are_not_followed(self):
+        """rsync -a brought symbolic links along. A job whose out/ pointed at a folder on the worker had
+        its result written there, and everything in that folder published to the queue."""
+        ids = self.queue_photos()
+        private = self.root / 'private'
+        private.mkdir()
+        (private / 'key').write_text('secret')
+        (private / 'frame-01-v1-clean-v1.png').write_bytes(b'mine')
+        for jid in ids:
+            os.symlink(private, self.queue / 'jobs' / jid / 'out')
+        seeded = self.queue / 'drop' / 'other' / 'checkpoints' / ids[0]     # and one among a worker's checkpoints
+        seeded.mkdir(parents=True)
+        os.symlink(private / 'key', seeded / 'fill-000001.npz')
+        w = self.worker('w1')
+        self.assertEqual(sorted([w.once(), w.once()]), sorted(ids))
+        self.assertEqual({p.name: p.read_bytes() for p in private.iterdir()},
+                         {'key': b'secret', 'frame-01-v1-clean-v1.png': b'mine'})
+        published = [p for p in (self.queue / 'drop' / 'w1').rglob('*') if p.is_file()]
+        self.assertFalse([p for p in published if p.name == 'key' or p.read_bytes() == b'secret'])
+        self.assertEqual(self.states(), ['done', 'done'])                   # and the jobs were done all the same
+        with self.assertRaisesRegex(queues.QueueError, 'names'):
+            queues.worker_settings(queue=str(self.queue), name='..')        # nor a name that climbs out of drop/
+
+    def test_a_result_still_to_be_pushed_stays_when_the_queue_cant_be_read(self):
+        """A job missing from the view counted as collected, and the worker cleared its own copy of the
+        result: but a job.json cut short isn't read, and an unmounted queue is an empty folder."""
+        self.photos = self.photos[:1]
+        self.queue_photos()
+        w = self.worker('w1')
+        push = w._push
+        w._push = lambda: False if any((w.mirror / 'results').glob('*/out/*')) else push()   # the result can't be sent
+        jid = w.once()
+        kept = w.mirror / 'results' / jid / 'out'
+        self.assertEqual(len(list(kept.iterdir())), 2)
+        (self.queue / 'jobs' / jid / 'job.json').write_text('{"job": {"format": 1, ')            # cut short
+        w.once()
+        self.assertEqual(len(list(kept.iterdir())), 2)
+        states = {row['id']: row['state'] for row in queues.status(self.q)['jobs']}
+        self.assertEqual(states[jid], 'damaged')                            # shown, and it can be taken out by name
+        away = self.root / 'queue-away'
+        self.queue.rename(away)
+        self.queue.mkdir()                                                  # the mount point, with nothing mounted
+        w.once()
+        self.assertEqual(len(list(kept.iterdir())), 2)
+        shutil.rmtree(self.queue)
+        away.rename(self.queue)
+        self.assertEqual(queues.remove(self.q, [jid[:10]], say=lambda *a: None), [jid])
+        w._push = push
+        w.once()                                                            # gone from the queue now: cleared
+        self.assertFalse((w.mirror / 'results' / jid).exists())
+
+    def test_a_folder_the_worker_cleared_is_gone_and_no_longer_counts_as_held(self):
+        self.queue_photos()
+        w = self.worker('w1')
+        jid = w.once()
+        held = w.mirror / 'checkpoints' / jid
+        held.mkdir(parents=True)
+        (held / 'fill-000000.npz').write_bytes(b'slow work')
+        w._push()
+        real = queues._remote
+
+        def no_rights_in_drop(q, *command, **kw):   # as on a server: the drop folders belong to the workers
+            if command[:1] == ('rm',) and any('/drop/' in c for c in command):
+                return False
+            return real(q, *command, **kw)
+        with mock.patch.object(queues, '_remote', no_rights_in_drop):
+            queues.collect(self.q, say=lambda *a: None)
+        emptied = []
+        with mock.patch.object(w, '_empty', side_effect=lambda kind, j: emptied.append((kind, j)) or queues.Worker._empty(w, kind, j)):
+            for _ in range(3):
+                w.once()
+        self.assertEqual(sorted(k for k, j in emptied if j == jid), ['checkpoints', 'failed', 'results'])   # once, not at every look
+        self.assertEqual([p for kind in ('results', 'checkpoints') for p in (self.queue / 'drop' / 'w1' / kind).glob(jid)], [])
+        self.assertEqual(w.view().mine['w1']['checkpoints'], [])
+
+    def test_a_photo_whose_name_starts_with_a_dot_comes_back_too(self):
+        hidden = self.root / 'photos' / '.hidden.png'
+        shutil.copyfile(self.photos[0], hidden)
+        self.photos = [hidden]
+        self.queue_photos()
+        self.assertIsNotNone(self.worker('w1').once())
+        code, recs = self.ofk('queue', 'collect')
+        self.assertEqual((code, [Path(r['output']).name for r in recs]), (0, ['.hidden-clean-v1.png']))
+
+    def test_files_of_the_wrong_shape_in_the_queue_stop_nothing(self):
+        """The queue is a folder other machines write to. One file that was JSON but not what it should
+        be raised an error in every worker and every queue command, `queue remove` among them."""
+        ids = self.queue_photos()
+        odd = self.queue / 'jobs' / ('0' * 64)
+        odd.mkdir()
+        (odd / 'job.json').write_text('[1, 2]')
+        strange = self.queue / 'jobs' / ('1' * 64)
+        strange.mkdir()
+        (strange / 'job.json').write_text('{"job": 5, "about": {"packed_utc": 7}}')
+        drop = self.queue / 'drop' / 'w9'
+        for name, text in (('worker.json', '{"seen": "lately", "memory_gb": "lots"}'), ('leases/x.json', '{"until": "soon"}'),
+                           (f'failed/{ids[0]}/why.json', '{"at": "then", "tries": "many"}'),
+                           (f'results/{ids[1]}/out/x.json', '[]'), ('leases/y.json', '7')):
+            (drop / name).parent.mkdir(parents=True, exist_ok=True)
+            (drop / name).write_text(text)
+        (self.queue / 'jobs' / ids[0] / 'rejected.json').write_text('{"not": "a list"}')
+        (self.queue / 'jobs' / ids[0] / 'retry.json').write_text('[4, "x"]')
+        info = queues.status(self.q)
+        self.assertEqual(sorted(r['state'] for r in info['jobs']), ['damaged', 'damaged', 'done', 'failed'])
+        w = self.worker('w1')
+        self.assertEqual(w.once(), ids[0])                                   # the worker carries on with what it can
+        self.assertEqual(self.ofk('queue', 'status')[0], 0)
+        code, said = self.ofk('queue', 'remove', '--job', '0000', '--job', '1111')
+        self.assertEqual((code, said['removed']), (0, ['0' * 64, '1' * 64]))
+        self.assertEqual(sorted(p.name for p in (self.queue / 'jobs').iterdir()), sorted(ids))
+
+    def test_one_job_that_cant_be_placed_doesnt_stop_the_rest_being_collected(self):
+        self.queue_photos()
+        w = self.worker('w1')
+        w.once(), w.once()
+        real, calls = jobs.collect, []
+
+        def first_fails(package, to=None):
+            calls.append(package)
+            if len(calls) == 1:
+                raise PermissionError(13, 'Permission denied', str(package))
+            return real(package, to)
+        with mock.patch.object(jobs, 'collect', first_fails):
+            code, recs = self.ofk('queue', 'collect')
+        self.assertEqual((code, sorted('error' in r for r in recs)), (1, [False, True]))
+        self.assertEqual(self.states(), ['done'])                           # the one that couldn't be placed is kept
+        self.assertEqual(self.ofk('queue', 'collect')[0], 0)
+
+    def test_a_job_that_couldnt_be_cleared_is_kept_as_ours_and_cleared_next_time(self):
+        self.photos = self.photos[:1]
+        (jid,) = self.queue_photos()
+        self.worker('w1').once()
+        with mock.patch.object(queues, '_remote', lambda q, *c, **kw: False):
+            code, recs = self.ofk('queue', 'collect')
+        self.assertEqual((code, len(recs)), (0, 1))                         # placed beside the photo all the same
+        self.assertTrue((queues.outbox(self.q) / jid / 'job.json').exists())
+        code, recs = self.ofk('queue', 'collect')                           # still ours, so no "--to DIR" needed
+        self.assertEqual((code, 'error' in recs[0], queues.status(self.q)['jobs']), (0, False, []))
+
+    def test_a_home_folder_in_a_queues_address_is_understood(self):
+        hosts = self.root / 'config' / 'hosts.toml'
+        hosts.write_text('[queues.far]\nqueue = "server:~/openfilmkit-queue"\n[queues.near]\nqueue = "~/openfilmkit-queue"\n'
+                         '[queues.odd]\nqueue = 5\n')
+        self.assertEqual(queues.queue_settings('far')['queue'], 'server:openfilmkit-queue')
+        self.assertEqual(queues.queue_settings('near')['queue'], str(Path.home() / 'openfilmkit-queue'))
+        with self.assertRaisesRegex(queues.QueueError, 'host:path'):
+            queues.queue_settings('odd')
+        s = queues.worker_settings(queue='server:~/q', name='w1')
+        self.assertEqual((s['queue'], s['drop']), ('server:q', 'server:q/drop/w1'))
+
+    def test_a_job_packed_elsewhere_stays_a_strangers_after_a_collect_that_failed(self):
+        """`collect --to` fetched a stranger's job.json into the outbox, which is what marks a job as
+        packed here: after a collect that failed, a plain collect put the result where the stranger's
+        job.json said."""
+        self.photos = self.photos[:1]
+        (jid,) = self.queue_photos()
+        shutil.rmtree(queues.outbox(self.q))                                # as on another machine
+        w = self.worker('w1')
+        w.once()
+        result = next((self.queue / 'drop' / 'w1' / 'results' / jid / 'out').glob('*.png'))
+        result.write_bytes(b'tampered')
+        code, recs = self.ofk('queue', 'collect', '--to', str(self.root / 'inbox'))
+        self.assertEqual((code, 'error' in recs[0]), (1, True))
+        w.once()                                                            # done again
+        code, recs = self.ofk('queue', 'collect')
+        self.assertEqual((code, '--to DIR' in recs[0].get('error', '')), (1, True))
+        self.assertFalse(self.photos[0].with_name('frame-01-v1-clean-v1.png').exists())
+        code, recs = self.ofk('queue', 'collect', '--to', str(self.root / 'inbox'))
+        self.assertEqual((code, Path(recs[0]['output']).parent.name), (0, 'inbox'))
+
     def test_a_batch_that_wouldnt_fit_on_the_queues_machine_is_refused(self):
         with mock.patch.object(queues, '_free_bytes', lambda q: 1000):
             code, err = self.ofk('clean', *map(str, self.photos), '--no-faces', '--queue', 'home')

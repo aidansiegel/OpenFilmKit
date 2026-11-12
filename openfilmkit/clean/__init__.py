@@ -31,6 +31,7 @@ Needs OpenCV (opencv-python-headless), numpy and Pillow.
 import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import cv2
@@ -53,6 +54,10 @@ FACE_DETECTOR = (f'YuNet ({FACE_MODEL.name}, OpenCV Zoo) on a copy {DETECT_SIDE}
 
 class CleanError(Exception):
     pass
+
+
+class CantWrite(CleanError):
+    """The copy couldn't be written (no room, say): nothing wrong with the photo, and another try may do it."""
 
 
 def sha(path):
@@ -300,32 +305,86 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         steps.append({'step': 'spots', 'spots': [list(s) for s in spots], 'pixels_filled': int(holes.sum()),
                       'method': 'OpenCV inpaint (Telea), at spots chosen by hand'})
 
+    # The copy and its recipe are written under other names and given their own only when both are
+    # whole, and only if the names are still free: the look at the top of this was minutes ago, or
+    # hours, and a copy collected from a queue or made by another run since then must not be replaced.
+    # A run stopped here (Ctrl-C, a full disk) leaves nothing: not a copy that looks finished without
+    # its recipe.
     dest.parent.mkdir(parents=True, exist_ok=True)
-    save(cleaned, dest)
-    if sha(source) != digest:
-        raise CleanError('source changed during cleaning')
+    made = dest.with_name(f'.{dest.stem}.{os.getpid()}.tmp{dest.suffix}')   # its suffix kept: save() goes by it
+    part = recipe_path.with_name(f'.{recipe_path.name}.{os.getpid()}.tmp')
+    made_sha = None
+    try:
+        save(cleaned, made)
+        if sha(source) != digest:
+            raise CleanError('source changed during cleaning')
+        made_sha = sha(made)
+        record = _record(source, digest, dest, made_sha, cleaned, steps, faces, (w, h), bits, model_fill,
+                         settings(crop, dust, protect_faces, color, straighten, lift_shadows, red_eye, scratches,
+                                  spare_long_lines))
+        if ck:   # stages an earlier, stopped run had finished, and where
+            record['resumed_from_checkpoints'] = ck.resumed
+        part.write_text(json.dumps(record, indent=2) + '\n')
+        for p in (dest, recipe_path):
+            if p.exists():
+                raise CleanError(f'refusing to overwrite {p}, which appeared while this photo was being cleaned')
+        try:
+            os.link(made, dest)     # fails if the name was taken this instant; exFAT has no links: then by renaming
+        except FileExistsError:
+            raise CleanError(f'refusing to overwrite {dest}, which appeared while this photo was being cleaned') from None
+        except OSError:
+            os.replace(made, dest)
+        os.replace(part, recipe_path)   # last: the recipe is what says the copy is done
+    except BaseException as e:
+        # Stopped between the two: the copy is taken away again if it is this run's (told by the link, or by
+        # its checksum; a file another run put there is not) and its recipe isn't in place to go with it.
+        try:
+            mine = dest.exists() and (os.path.samefile(made, dest) if made.exists() else sha(dest) == made_sha)
+            whole = json.loads(recipe_path.read_text()).get('output_sha256') == made_sha if recipe_path.exists() else False
+        except (OSError, ValueError, AttributeError):
+            mine = whole = False
+        if mine and not whole:
+            _discard(dest)
+        if isinstance(e, OSError):
+            raise CantWrite(f"couldn't write the copy in {dest.parent}: {e.strerror or e}") from e
+        raise
+    finally:
+        _discard(made)
+        _discard(part)
+    return record
+
+
+def _discard(path):
+    """Remove a file this run made; once more if stopped in the act (Ctrl-C can land anywhere)."""
+    try:
+        path.unlink(missing_ok=True)
+    except KeyboardInterrupt:
+        path.unlink(missing_ok=True)
+        raise
+    except OSError:
+        pass
+
+
+def _record(source, digest, dest, output_sha256, cleaned, steps, faces, size, bits, model_fill, options):
+    """The recipe of a cleaned copy."""
+    w, h = size
     source_recipe = Path(str(source) + '.json')
-    record = {
+    return {
         'openfilmkit': {'version': __version__, 'record_format': 2},
         'created_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'status': 'Cleaned copy — requires visual review',
         'source': str(source), 'source_sha256': digest,
         'source_recipe_sha256': sha(source_recipe) if source_recipe.exists() else None,
-        'options': settings(crop, dust, protect_faces, color, straighten, lift_shadows, red_eye,
-                            scratches, spare_long_lines),
+        'options': options,
         'steps': steps, 'faces': faces,
         'source_dimensions': [w, h], 'output_dimensions': [cleaned.shape[1], cleaned.shape[0]],
-        'output': str(dest), 'output_sha256': sha(dest),
+        'output': str(dest), 'output_sha256': output_sha256,
         'bits_per_channel': {'source': bits,
                              'output': 16 if cleaned.dtype == np.uint16 and dest.suffix.lower() in ('.tif', '.tiff') else 8},
         'libraries': {'opencv': cv2.__version__, 'numpy': np.__version__},
         # Only the damaged spots a model filled in, if any; everything else is the scan.
         'filled_in_by_model': model_fill, 'approved': False,
     }
-    if ck:   # stages an earlier, stopped run had finished, and where
-        record['resumed_from_checkpoints'] = ck.resumed
-    recipe_path.write_text(json.dumps(record, indent=2) + '\n')
-    return record
 
 
 def settings(crop=True, dust=True, protect_faces=True, color=False, straighten=None,

@@ -132,6 +132,31 @@ class Clean(unittest.TestCase):
         with self.assertRaises(clean.CleanError):
             clean.clean(src, src)
 
+    def test_a_file_that_takes_the_name_while_cleaning_is_not_replaced(self):
+        """The name was looked at when cleaning started and written to when it ended, minutes or hours
+        later: a copy collected from a queue meanwhile, or another run's, was replaced."""
+        src, dest, save = self.write(scene()), self.root / 'out.png', clean.save
+
+        def raced(img, to):
+            dest.write_bytes(b'theirs')
+            save(img, to)
+        with mock.patch.object(clean, 'save', raced), self.assertRaisesRegex(clean.CleanError, 'overwrite'):
+            clean.clean(src, dest, protect_faces=False)
+        self.assertEqual({p.name for p in self.root.iterdir()}, {'frame-v1.jpg', 'out.png'})
+        self.assertEqual(dest.read_bytes(), b'theirs')
+
+    def test_a_clean_that_fails_while_writing_leaves_nothing_behind(self):
+        src = self.write(scene())
+
+        def full(img, to):
+            Path(to).write_bytes(b'half a pic')
+            raise OSError(28, 'No space left on device')
+        with mock.patch.object(clean, 'save', full), self.assertRaisesRegex(clean.CleanError, 'No space left') as said:
+            clean.clean(src, protect_faces=False)
+        self.assertIn(str(src.parent.resolve()), str(said.exception))        # where there is no space
+        self.assertEqual([p.name for p in self.root.iterdir()], ['frame-v1.jpg'])
+        self.assertEqual(Path(clean.clean(src, protect_faces=False)['output']).name, 'frame-v1-clean-v1.jpg')
+
     def test_dust_can_be_left_for_later(self):
         r = self.root / 'roll-02'
         roll.create(r)

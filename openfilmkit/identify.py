@@ -22,6 +22,7 @@ import os
 import plistlib
 import subprocess
 import sys
+import xml.parsers.expat
 from pathlib import Path
 
 from .runtime import run_scanimage
@@ -116,7 +117,8 @@ def usb_devices():
             return usb_devices_macos()
         if sys.platform.startswith('linux'):
             return usb_devices_linux()
-    except (OSError, subprocess.SubprocessError, plistlib.InvalidFileException):
+    except (OSError, ValueError, subprocess.SubprocessError, plistlib.InvalidFileException,
+            xml.parsers.expat.ExpatError):   # the last: a device whose name holds a byte XML can't
         pass
     return None
 

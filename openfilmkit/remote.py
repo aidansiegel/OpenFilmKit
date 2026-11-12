@@ -67,7 +67,7 @@ def _ssh(h, command, capture=True):
 def _rsync(h, *args):
     if not shutil.which('rsync'):
         raise RemoteError('rsync not found here')
-    argv = ['rsync', '-a', '--partial', '-e', h['ssh_command'], *args]
+    argv = ['rsync', '-rpt', '--partial', '-e', h['ssh_command'], *args]   # no links brought along (see queues._rsync)
     if subprocess.run(argv).returncode:
         raise RemoteError(f'copying to or from {h["name"]} failed (rsync)')
 
@@ -97,24 +97,35 @@ def run_on(name, packages, to=None, keep=False, say=print):
     r = _ssh(h, ['mkdir', '-p', h['jobs']])
     if r.returncode:
         raise RemoteError(f'could not make {h["jobs"]} on {h["name"]}')
-    todo = [p for p in packages if not jobs.done(p)]
+    def unfinished(p):
+        try:
+            return not jobs.done(p)
+        except jobs.JobError:   # not a package any more: said for it below, where each is looked at
+            return False
+    todo = [p for p in packages if unfinished(p)]
     failed = {}
     if todo:
         say(f'Copying {len(todo)} job{"s" if len(todo) != 1 else ""} to {h["name"]}...')
-        _rsync(h, *[str(p) for p in todo], f'{h["ssh"]}:{h["jobs"]}/')
+        # Not out/ or work/: those are the host's to fill. A result cut short on its way back (rsync
+        # --partial keeps what arrived) would otherwise go up over the host's whole one, to be done again.
+        _rsync(h, '--exclude=/*/out/', '--exclude=/*/work/', *[str(p) for p in todo], f'{h["ssh"]}:{h["jobs"]}/')
         say(f'Running on {h["name"]}...')
         r = _ssh(h, shlex.split(h['openfilmkit']) + ['job', 'run', '--json'] + [f'{h["jobs"]}/{p.name}' for p in todo])
         try:
             for p, rec in zip(todo, json.loads(r.stdout)):
                 if 'error' in rec:
-                    failed[p] = rec['error']
+                    failed[p] = (rec['error'], rec.get('always_fails'))
         except (TypeError, ValueError):
             pass   # cut off (a dropped connection, say): each job is checked below
     results = []
     for p, path in zip(packages, remote):
         try:
             if p in failed:
-                raise RemoteError(f'on {h["name"]}: {failed[p]}')
+                why, always = failed[p]
+                if always and not keep:   # it can't be done however often it's tried: nothing to come back for
+                    _ssh(h, shlex.split(h['openfilmkit']) + ['job', 'remove', path])
+                    shutil.rmtree(p, ignore_errors=True)
+                raise RemoteError(f'on {h["name"]}: {why}')
             if not jobs.done(p):
                 (p / 'out').mkdir(exist_ok=True)
                 _rsync(h, f'{h["ssh"]}:{path}/out/', f'{p}/out/')
@@ -122,8 +133,11 @@ def run_on(name, packages, to=None, keep=False, say=print):
                 raise RemoteError(f'the job did not finish on {h["name"]}; run the same command again to resume it')
             record = jobs.collect(p, to)   # one recipe per destination
             if not keep:   # collected and checked: the copies there and here can go
-                _ssh(h, shlex.split(h['openfilmkit']) + ['job', 'remove', path])
-                jobs.remove(p)
+                if _ssh(h, shlex.split(h['openfilmkit']) + ['job', 'remove', path]).returncode == 0:
+                    jobs.remove(p)
+                else:   # the copy here is kept with it: the same command again finds both and clears them
+                    say(f"Couldn't remove the job from {h['name']} ({path}, with a copy of the photo); "
+                        'run the same command again to clear it.')
             results.append(record)
         except (RemoteError, jobs.JobError) as e:
             results.append({'package': str(p), 'error': str(e)})

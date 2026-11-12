@@ -51,8 +51,9 @@ class Jobs(unittest.TestCase):
     def test_a_pack_that_fails_partway_leaves_nothing_behind(self):
         """On a full disk, say: the half-made package stayed for good, with its copy of the photo."""
         with mock.patch.object(jobs, '_copy', side_effect=OSError(28, 'No space left on device')):
-            with self.assertRaises(OSError):
+            with self.assertRaisesRegex(jobs.JobError, 'No space left') as said:
                 self.pack()
+        self.assertIn(str(self.queue), str(said.exception))                 # where there is no space
         self.assertEqual(list(self.queue.iterdir()), [])
         with mock.patch.object(jobs, '_write_json', side_effect=KeyboardInterrupt):   # stopped as it finished
             with self.assertRaises(KeyboardInterrupt):
@@ -88,6 +89,94 @@ class Jobs(unittest.TestCase):
         away.rename(self.root / 'photos')
         self.assertEqual(len(jobs.collect(package)), 1)                      # and is collected once it's back
         self.assertEqual(len(jobs.collect(package, self.root / 'new' / 'folder')), 1)   # one named with --to is made
+
+    def by_hand(self, job=None, about=None, raw=None):
+        """A package made by hand, as one from elsewhere can be: its folder named for whatever job it holds."""
+        job = {'format': 1, 'command': 'clean', 'output_suffix': '.png', 'input': {'sha256': 'x'}, 'options': {},
+               'openfilmkit': '0', 'models': {}} if job is None else job
+        d = {'source': str(self.root / 'photos' / 'a.png'), 'output_name': 'a-clean-v1.png'}
+        about = dict(d, input_name='a.png', destinations=[d]) if about is None else about
+        package = self.root / 'by-hand' / jobs.job_id(job)
+        shutil.rmtree(package, ignore_errors=True)
+        (package / 'out').mkdir(parents=True)
+        (package / 'job.json').write_text(raw if raw is not None else json.dumps({'job': job, 'about': about}))
+        return package
+
+    def test_a_package_made_elsewhere_cant_have_another_file_replaced(self):
+        """collect writes where a package's job.json says. One made by hand, its output a name with no
+        suffix, had any .json file on the collecting machine replaced by its own."""
+        victim = self.root / 'victim'
+        victim.mkdir()
+        (victim / 'settings.json').write_text('{"mine": true}')
+        job = {'format': 1, 'command': 'clean', 'output_suffix': '', 'input': {'sha256': 'x'}, 'options': {},
+               'openfilmkit': '0', 'models': {}}
+        d = {'source': str(victim / 'x'), 'output_name': 'settings'}
+        package = self.by_hand(job, dict(d, input_name='a.png', destinations=[d]))
+        (package / 'out' / 'settings').write_bytes(b'anything')
+        (package / 'out' / 'settings.json').write_text(json.dumps({'output_sha256': jobs.sha(package / 'out' / 'settings')}))
+        with self.assertRaisesRegex(jobs.JobError, 'kind'):
+            jobs.collect(package)
+        self.assertEqual((victim / 'settings.json').read_text(), '{"mine": true}')
+        self.assertEqual(jobs.SUFFIXES, clean.OUTPUTS)
+
+    def test_a_job_file_of_the_wrong_shape_is_not_a_package(self):
+        good = {'format': 1, 'command': 'clean', 'output_suffix': '.png', 'input': {'sha256': 'x'}, 'options': {},
+                'openfilmkit': '0', 'models': {}}
+        d = {'source': '/photos/a.png', 'output_name': 'a-clean-v1.png'}
+        for job, about, raw in ((None, None, '[1, 2]'), (None, None, '{"job": [], "about": {}}'), (None, None, 'null'),
+                                (good, dict(d, input_name='a.png', destinations=None), None),
+                                (good, dict(d, input_name='a.png', destinations=[{'output_name': 'a-clean-v1.png'}]), None),
+                                (good, dict(d, input_name='a.png', destinations=['x']), None),
+                                (dict(good, options=None), None, None), (dict(good, input='x'), None, None),
+                                ({k: v for k, v in good.items() if k != 'openfilmkit'}, None, None)):
+            package = self.by_hand(job, about, raw)
+            for use in (jobs.read, jobs.done, jobs.run, jobs.collect, jobs.show):
+                with self.assertRaises(jobs.JobError, msg=(raw, job, about, use.__name__)):
+                    use(package)
+        package = self.pack()
+        shutil.rmtree(package / 'input')
+        os.symlink(self.root / 'photos', package / 'input')                  # a link where its files should be
+        with self.assertRaisesRegex(jobs.JobError, 'link'):
+            jobs.run(package)
+
+    def test_a_recipe_or_a_file_put_there_meanwhile_is_never_replaced(self):
+        package = self.pack()
+        jobs.run(package)
+        dest = self.src.with_name('frame-v1-clean-v1.png')
+        Path(str(dest) + '.json').write_text('{"approved": true}')           # notes on a copy that was moved away
+        (rec,) = jobs.collect(package)
+        self.assertEqual(Path(rec['output']).name, 'frame-v1-clean-v2.png')  # so this copy takes the next number
+        self.assertEqual(Path(str(dest) + '.json').read_text(), '{"approved": true}')
+        recipe = Path(rec['output'] + '.json')
+        recipe.write_text(json.dumps(dict(json.loads(recipe.read_text()), approved=True)))
+        jobs.collect(package)                                                # collecting again leaves what was added
+        self.assertTrue(json.loads(recipe.read_text())['approved'])
+        inbox, copy = self.root / 'inbox', shutil.copyfile
+
+        def raced(src, dst):   # another file takes the name between the look and the placing
+            copy(src, dst)
+            (inbox / 'frame-v1-clean-v1.png').write_bytes(b'theirs')
+        with mock.patch.object(jobs.shutil, 'copyfile', raced), self.assertRaisesRegex(jobs.JobError, 'appeared'):
+            jobs.collect(package, inbox)
+        self.assertEqual({p.name: p.read_bytes() for p in inbox.iterdir()}, {'frame-v1-clean-v1.png': b'theirs'})
+
+    def test_a_result_that_couldnt_be_written_may_be_tried_again(self):
+        package = self.pack()
+        with mock.patch.object(clean, 'save', side_effect=OSError(28, 'No space left on device')):
+            with self.assertRaisesRegex(jobs.JobError, 'No space left') as failed:
+                jobs.run(package)
+        self.assertNotIsInstance(failed.exception, jobs.AlwaysFails)        # a full disk passes; a photo that can't be read doesn't
+        self.assertEqual(sorted(p.name for p in package.iterdir()), ['input', 'job.json', 'work'])
+        self.assertEqual(jobs.run(package)['output_sha256'], jobs.sha(package / 'out' / 'frame-v1-clean-v1.png'))
+
+    def test_only_checkpoint_folders_are_cleared_from_the_cache(self):
+        cache = self.root / 'somewhere'
+        for name in ('my-model-run', 'ab' * 32):
+            (cache / 'checkpoints' / name).mkdir(parents=True)
+            os.utime(cache / 'checkpoints' / name, (time.time() - 30 * 86400,) * 2)
+        with mock.patch.dict(os.environ, {'OPENFILMKIT_CACHE': str(cache)}):
+            jobs.local_checkpoints(jobs.clean_job(self.src)[0])
+        self.assertEqual([p.name for p in (cache / 'checkpoints').iterdir()], ['my-model-run'])
 
     def test_the_same_work_packs_to_the_same_package_from_any_folder(self):
         first = self.pack()
