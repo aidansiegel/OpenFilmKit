@@ -244,14 +244,17 @@ def _result(package, about):
 
 
 def done(package):
-    """The finished job's recipe, or None: the recipe is written last, and the file it describes
-    must still match it."""
+    """The finished job's recipe, or None: the recipe is written last, it must be whole (one cut
+    short in transit doesn't count), and the file it describes must still match it."""
     job, about = read(package)
     out = _result(package, about)
     recipe = Path(str(out) + '.json')
     if not recipe.is_file() or not out.is_file():
         return None
-    record = json.loads(recipe.read_text())
+    try:
+        record = json.loads(recipe.read_text())
+    except (OSError, ValueError):
+        return None
     return record if record.get('output_sha256') == sha(out) else None
 
 

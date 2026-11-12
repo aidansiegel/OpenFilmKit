@@ -134,6 +134,18 @@ class Resume(unittest.TestCase):
         self.assertEqual(rec['resumed_from_checkpoints'], [])
         self.assertEqual(rec['output_sha256'], self.ref['output_sha256'])
 
+    def test_checkpoints_cut_short_in_transit_are_worked_out_again(self):
+        # Workers pass checkpoints on with rsync --partial, which keeps what arrived of a file under
+        # its own name when the connection drops.
+        folder = self.root / 'cut-short'
+        self.stop_after('fill-000002', folder)
+        mask = folder / 'ck' / 'scratch_mask.npz'
+        mask.write_bytes(mask.read_bytes()[:mask.stat().st_size // 2])
+        (folder / 'ck' / 'fill-000001.npz').write_bytes(b'')
+        rec = self.resume(folder)
+        self.assertNotIn('scratch_mask', [r['stage'] for r in rec['resumed_from_checkpoints']])
+        self.assertEqual(rec['output_sha256'], self.ref['output_sha256'])
+
     def test_a_stopped_job_resumes_and_tidies_up(self):
         package = jobs.pack_clean(self.src, self.root / 'queue', output='frame-v1-clean-v1.png', **self.opts)
         real = checkpoints.Checkpoints.save

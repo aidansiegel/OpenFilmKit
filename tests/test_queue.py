@@ -360,6 +360,71 @@ class Queue(unittest.TestCase):
         self.assertNotIn(jid, w1.candidates(w1.view()))
         self.assertIn(jid, self.worker('w2').candidates(self.worker('w2').view()))
 
+    def test_a_job_that_fails_in_its_own_process_says_why(self):
+        bad = self.root / 'photos' / 'broken.png'
+        bad.write_bytes(b'not a picture')
+        queues.submit(self.q, [jobs.pack_clean(bad, queues.outbox(self.q), protect_faces=False)], say=lambda *a: None)
+        w = self.worker('w1', run=queues.run_in_subprocess)
+        with mock.patch.dict(os.environ, {'PYTHONPATH': str(ROOT)}):
+            jid = w.once()
+        (row,) = queues.status(self.q)['jobs']
+        self.assertEqual(row['state'], 'failed')
+        self.assertIn('cannot read image', row['error'])
+        self.assertFalse((w.state / 'jobs' / jid).exists())               # not tried here again: its copy goes
+
+    def test_a_worker_clears_its_own_copies_of_a_job_once_it_is_gone(self):
+        # A job it failed (or was stopped on) that another worker did: once collected, a copy of its
+        # files left here was pushed back to its drop folder on every look.
+        self.queue_photos()
+
+        def broken(package, beat, every):
+            raise jobs.JobError('out of film')
+        w1 = self.worker('w1', run=broken)
+        jid = w1.once()
+        stopped = w1.mirror / 'checkpoints' / jid
+        stopped.mkdir(parents=True)
+        (stopped / 'fill-000000.npz').write_bytes(b'slow work')          # as a stopped run leaves it
+        w1.publish()
+        w2 = self.worker('w2')
+        while w2.once():
+            pass
+        queues.collect(self.q, say=lambda *a: None)
+        w1.once()
+        w1.publish()
+        drop = self.queue / 'drop' / 'w1'
+        self.assertEqual([p for kind in ('failed', 'checkpoints') for p in (drop / kind).rglob('*') if p.is_file()], [])
+        self.assertFalse((w1.mirror / 'failed' / jid).exists() or stopped.exists())
+
+    def test_a_result_whose_recipe_was_cut_short_is_turned_down_and_the_rest_collected(self):
+        ids = self.queue_photos()
+        w = self.worker('w1')
+        w.once(), w.once()
+        bad = sorted(ids)[0]
+        recipe = next((self.queue / 'drop' / 'w1' / 'results' / bad / 'out').glob('*.json'))
+        recipe.write_text(recipe.read_text()[:200])                         # rsync --partial keeps what arrived
+        recs = queues.collect(self.q, say=lambda *a: None)
+        self.assertIn('error', next(r for r in recs if r.get('id') == bad))
+        self.assertEqual(len([r for r in recs if 'error' not in r]), 1)
+        self.assertIn(bad, w.candidates(w.view()))                          # free to run again
+
+    def test_results_are_left_alone_when_their_jobs_description_cant_be_fetched(self):
+        self.queue_photos()
+        shutil.rmtree(queues.outbox(self.q))                                # packed on another machine
+        w = self.worker('w1')
+        w.once(), w.once()
+        real = queues._rsync
+
+        def no_job_json(ssh_command, *args, quiet=False):                    # the connection drops just then
+            if any(not a.startswith('-') and a.endswith('/job.json') for a in map(str, args)):
+                return False
+            return real(ssh_command, *args, quiet=quiet)
+        with mock.patch.object(queues, '_rsync', no_job_json):
+            recs = queues.collect(self.q, to=self.root / 'inbox', say=lambda *a: None)
+        self.assertEqual([('error' in r) for r in recs], [True, True])
+        self.assertEqual(self.states(), ['done', 'done'])
+        recs = queues.collect(self.q, to=self.root / 'inbox', say=lambda *a: None)
+        self.assertEqual(len([r for r in recs if 'error' not in r]), 2)
+
 
 if __name__ == '__main__':
     unittest.main()

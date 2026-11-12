@@ -13,6 +13,7 @@ options: a job package's work/checkpoints/ does (its name is the job's checksum)
 import json
 import os
 import socket
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +46,8 @@ class Checkpoints:
         if not path.is_file():
             return None
         try:
-            with np.load(path, allow_pickle=False) as z:
+            # Opened here, so it's closed when np.load gives up on it too.
+            with open(path, 'rb') as f, np.load(f, allow_pickle=False) as z:
                 meta = json.loads(str(z['_meta']))
                 if meta['made_with'] != made_with():
                     return None
@@ -56,8 +58,10 @@ class Checkpoints:
                         out[name] = np.unpackbits(z[name], count=int(np.prod(shape))).reshape(shape).astype(bool)
                     else:
                         out[name] = z[name]
-        except (OSError, ValueError, KeyError):
-            return None   # unreadable: work the stage out again
+        except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile):
+            # Unreadable (cut short in transit, say: rsync --partial keeps what arrived of a file
+            # under its own name): work the stage out again.
+            return None
         if note:
             self.resumed.append({'stage': stage, 'made_on': meta['made_on']})
         return out

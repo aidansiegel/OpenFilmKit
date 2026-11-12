@@ -49,6 +49,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -311,6 +312,11 @@ def collect(q, to=None, say=print):
                 continue
             (package / 'out').mkdir(parents=True, exist_ok=True)
             _rsync(q['ssh_command'], f"{q['queue'].rstrip('/')}/jobs/{jid}/job.json", f'{package}/', quiet=True)
+        try:
+            jobs.read(package)   # the results are judged by it: without it (not fetched, say), leave them be
+        except jobs.JobError as e:
+            out.append({'id': jid, 'error': str(e)})
+            continue
         record = None
         for worker in view.results[jid]:
             shutil.rmtree(package / 'out', ignore_errors=True)
@@ -422,22 +428,29 @@ def memory_free_gb():
 
 def run_in_subprocess(package, beat, every):
     """Run a package with `openfilmkit job run` in its own process (so each job's memory is
-    returned when it ends), calling beat() every `every` seconds while it runs."""
-    proc = subprocess.Popen([sys.executable, '-m', 'openfilmkit', 'job', 'run', '--json', str(package)],
-                            stdout=subprocess.DEVNULL)
-    try:
-        while True:
+    returned when it ends), calling beat() every `every` seconds while it runs. A job that fails
+    there raises JobError with the reason it gave."""
+    with tempfile.TemporaryFile('w+') as report:   # its --json report (a file: a pipe could fill up)
+        proc = subprocess.Popen([sys.executable, '-m', 'openfilmkit', 'job', 'run', '--json', str(package)],
+                                stdout=report)
+        try:
+            while True:
+                try:
+                    proc.wait(timeout=every)
+                    break
+                except subprocess.TimeoutExpired:
+                    beat()
+        except BaseException:
+            proc.terminate()
+            proc.wait()
+            raise
+        if not jobs.done(package):
+            report.seek(0)
             try:
-                proc.wait(timeout=every)
-                break
-            except subprocess.TimeoutExpired:
-                beat()
-    except BaseException:
-        proc.terminate()
-        proc.wait()
-        raise
-    if not jobs.done(package):
-        raise jobs.JobError(f'job run ended with status {proc.returncode}')
+                reason = json.load(report)[0]['error']
+            except (ValueError, LookupError, TypeError):   # no report (it crashed): its log says why
+                reason = f'job run ended with status {proc.returncode}'
+            raise jobs.JobError(reason)
 
 
 class Worker:
@@ -511,11 +524,18 @@ class Worker:
 
     def tidy(self, view):
         """Clear this worker's drop folder of jobs that are gone from the queue (collected) and of
-        its results that collecting turned down."""
+        its results that collecting turned down, and first its own copies of them here: the next
+        push would put a copy left in the mirror back, and a job's package holds its photo."""
         held = view.mine.get(self.s['name'], {})
         gone = {jid for kind in ('results', 'checkpoints', 'failed') for jid in held.get(kind, [])
                 if jid not in view.jobs}
         refused = set(held.get('rejected', []))
+        for folder in (self.mirror / 'results', self.mirror / 'checkpoints', self.mirror / 'failed', self.state / 'jobs'):
+            for p in folder.glob('*'):
+                if JOB_ID.match(p.name) and p.name not in view.jobs:
+                    shutil.rmtree(p, ignore_errors=True)
+        for jid in refused:
+            shutil.rmtree(self.mirror / 'results' / jid, ignore_errors=True)
         if not gone | refused:
             return
         for kind in ('results', 'checkpoints', 'failed'):
@@ -627,6 +647,7 @@ class Worker:
             _write_json(self.mirror / 'failed' / jid / 'why.json', {'job': jid, 'error': str(e), 'at': self.now()})
             self.current = None
             self.release(jid)
+            shutil.rmtree(package, ignore_errors=True)   # not tried here again: its photo can go
             return False
         except BaseException:   # stopped (Ctrl-C, systemd): leave the slow work for whoever is next
             self._push_checkpoints(jid, package)
