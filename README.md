@@ -58,7 +58,9 @@ recipe beside it that says exactly how it was made.
 - `clean` removes dust and fibers and trims film-holder edges, always on a new copy. Eyes and
   mouths, and the camera's date stamp (bright or printed faintly, upright or down the side), are
   left untouched by dust removal; faces are found in any orientation, so sideways frames are
-  covered. Options:
+  covered. A photo from elsewhere (a phone, another scanning program) is read the way its file
+  says to show it: turned by its orientation tag, and converted to sRGB from the color profile it
+  carries, such as Display P3 or Adobe RGB. The recipe records both. Options:
   - `--no-dust` trims holder edges only; run `clean` again later for dust.
   - `--no-crop` keeps the holder edges; `--no-faces` skips face detection.
   - `--color` also corrects levels and color cast; `--straighten DEGREES`, `--lift-shadows GAMMA`

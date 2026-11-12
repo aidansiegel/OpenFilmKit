@@ -166,6 +166,10 @@ def describe(item):
             lines.append(f"  Spots: {len(step.get('spots', []))} filled by hand")
         elif kind == 'red_eye':
             lines.append(f"  Red eye: {len(step.get('eyes_corrected', []))} eyes")
+        elif kind == 'to_srgb':
+            lines.append(f"  Colors: converted from {step.get('from')} to sRGB")
+        elif kind == 'upright':
+            lines.append('  Turned upright, as its orientation tag says')
         else:
             lines.append(f'  {kind.replace("_", " ").capitalize()}')
     model = rec.get('filled_in_by_model')
@@ -184,20 +188,36 @@ def describe(item):
 
 # ---------------------------------------------------------------- previews
 
-def _full(path):
-    """The whole image as an RGB uint8 array (a 16-bit TIFF's top 8 bits)."""
+def _as_clean_reads(a, orientation, icc):
+    """Pixels (RGB, or gray as a 2-D array) the way clean reads their photo (see pixels.py): in sRGB
+    and turned upright, so an original lines up with its cleaned copy. With a color profile clean
+    would refuse, the photo can still be looked at, as it is."""
     import numpy as np
+    from .. import pixels
+    try:
+        a, _ = pixels.to_srgb(a, icc, exact=False)
+    except pixels.ProfileError:
+        a = a if a.ndim == 3 else np.dstack([a] * 3)
+    return pixels.upright(a, orientation)
+
+
+def _full(path):
+    """The whole image as an RGB uint8 array (a 16-bit TIFF's top 8 bits), as clean reads it."""
+    import numpy as np
+    from .. import pixels
     path = Path(path)
     if path.suffix.lower() in ('.tif', '.tiff'):
         import tifffile
-        a = tifffile.imread(path)
-        if a.ndim == 2:
-            a = np.dstack([a] * 3)
-        a = a[..., :3]
-        return (a >> 8).astype(np.uint8) if a.dtype == np.uint16 else a.astype(np.uint8)
-    from PIL import Image
-    with Image.open(path) as im:
-        return np.asarray(im.convert('RGB'))
+        with tifffile.TiffFile(path) as tif:
+            page = tif.pages[0]
+            a, tags = page.asarray(), pixels.tiff_tags(page)
+        a = a if a.ndim == 2 else a[..., :3]
+        a = (a >> 8).astype(np.uint8) if a.dtype == np.uint16 else a.astype(np.uint8)
+    else:
+        from PIL import Image
+        with Image.open(path) as im:
+            a, tags = np.asarray(im if im.mode == 'L' else im.convert('RGB')), pixels.tags(im)
+    return _as_clean_reads(a, *tags)
 
 
 def zoomed(z, center):
@@ -232,11 +252,16 @@ def preview_image(path, side=1200, region=None):
     path = Path(path)
     if region or path.suffix.lower() in ('.tif', '.tiff'):
         im = Image.fromarray(_crop(_full(path), region))
+        im.thumbnail((side, side))
     else:
-        im = Image.open(path)
-        im.draft('RGB', (side, side))   # JPEGs decode straight at a smaller size
-        im = im.convert('RGB')
-    im.thumbnail((side, side))
+        import numpy as np
+        from .. import pixels
+        with Image.open(path) as im:
+            tags = pixels.tags(im)
+            im.draft('RGB', (side, side))   # JPEGs decode straight at a smaller size
+            im = im if im.mode == 'L' else im.convert('RGB')
+            im.thumbnail((side, side))
+            im = Image.fromarray(_as_clean_reads(np.asarray(im), *tags))
     return _single(im)
 
 

@@ -119,6 +119,41 @@ class Model(unittest.TestCase):
         with self.assertRaises(model.NotComparable):
             model.changes(d / 'crop-v1.png', d / 'crop-v1-clean-v1.png')
 
+    def test_an_original_is_shown_the_way_clean_reads_it(self):
+        """Turned by its orientation tag and in sRGB, so it lines up with its cleaned copy."""
+        import imagecodecs
+        d = self.roll / 'derived'
+        x = np.linspace(0, 1, 1024)
+        curve = np.rint(np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4) * 65535).astype(np.uint16)
+        p3 = imagecodecs.cms_profile('rgb', whitepoint=(0.3127, 0.3290, 1.0), transferfunction=curve,
+                                     primaries=(0.680, 0.320, 1.0, 0.265, 0.690, 1.0, 0.150, 0.060, 1.0))
+
+        def squares(colors):
+            return np.repeat(np.repeat(np.array([colors], np.uint8), 40, 0), 40, 1)
+        exif = Image.Exif()
+        exif[0x0112] = 6                                       # orientation: show it a quarter turn clockwise
+        Image.fromarray(squares([(200, 100, 50), (40, 180, 90), (10, 20, 200)])).save(d / 'phone-v1.png', exif=exif, icc_profile=p3)
+        upright = np.rot90(squares([(215, 93, 31), (0, 183, 78), (7, 20, 208)]), -1)   # the same colors in sRGB
+        Image.fromarray(upright).save(d / 'phone-v1-clean-v1.png')
+        (d / 'phone-v1-clean-v1.png.json').write_text(json.dumps({'steps': [
+            {'step': 'to_srgb', 'from': 'Display P3'}, {'step': 'upright', 'orientation': 6}]}))
+        shown = model.preview_image(d / 'phone-v1.png')
+        self.assertEqual(shown.size, (40, 120))
+        self.assertLessEqual(np.abs(np.asarray(shown).astype(int) - upright).max(), 1)
+        self.assertEqual(model.changes(d / 'phone-v1.png', d / 'phone-v1-clean-v1.png')[1], 0)
+        self.assertEqual(model.before_image(d / 'phone-v1.png', d / 'phone-v1-clean-v1.png').size, (40, 120))
+        text = '\n'.join(model.describe(model.Item('phone', d / 'phone-v1.png', cleaned=[d / 'phone-v1-clean-v1.png'])))
+        for words in ('Turned upright', 'converted from Display P3 to sRGB'):
+            self.assertIn(words, text)
+        import tifffile
+        tifffile.imwrite(d / 'deep-v1.tif', squares([(200, 100, 50), (40, 180, 90), (10, 20, 200)]).astype(np.uint16) * 257,
+                         photometric='rgb', iccprofile=p3, extratags=[(274, 'H', 1, 6, True)])    # a TIFF's own orientation tag
+        deep = model.preview_image(d / 'deep-v1.tif')
+        self.assertEqual(deep.size, (40, 120))
+        self.assertLessEqual(np.abs(np.asarray(deep).astype(int) - upright).max(), 1)
+        Image.fromarray(upright).save(d / 'odd-v1.png', icc_profile=b'not a profile at all' * 20)
+        self.assertEqual(model.preview_image(d / 'odd-v1.png').size, (40, 120))    # clean refuses it; it can still be looked at
+
     def test_a_zoomed_preview_shows_that_part_at_full_size(self):
         d = self.roll / 'derived'
         base = np.zeros((400, 600, 3), np.uint8)

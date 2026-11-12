@@ -13,6 +13,12 @@ an 8-bit file, and applied to the 16-bit image. Color, crop, straightening, shad
 are computed at 16 bits; scratch fills and red eye, which replace small regions, are 8-bit
 precision inside those regions.
 
+A photo is read the way its file says to show it (see pixels.py): turned by its orientation tag,
+and converted to sRGB from whatever color profile it carries. The kit's conversions are upright
+sRGB already; a phone's photo or another program's TIFF often is neither, and the copy, which is
+written upright and tagged sRGB, would otherwise lie on its side in the wrong colors. Both are
+recipe steps.
+
 Faces are found with YuNet, a small face detector built into OpenCV (model bundled in data/, MIT
 license, from the OpenCV Zoo). It gives five landmarks per face, so, as in the archive pipeline,
 only eyes and mouths are protected from dust removal and the rest of the face is cleaned. It looks
@@ -34,7 +40,7 @@ from PIL import Image
 from .. import __version__
 from . import redeye, restore, scratches as scratch_pass
 from .checkpoints import Checkpoints
-from .. import models
+from .. import models, pixels
 
 Image.MAX_IMAGE_PIXELS = None
 DETECT_SIDE = 1200
@@ -101,15 +107,17 @@ OUTPUTS = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
 
 
 def load(path):
-    """RGB uint8, or uint16 for a 16-bit TIFF with a color profile (a converted copy). A 16-bit file
-    without one is a linear scan master, which needs `convert` first."""
+    """The photo as its file says to show it, and the recipe steps that took: RGB uint8, or uint16
+    for a 16-bit TIFF with a color profile (a converted copy; one without is a linear scan master,
+    which needs `convert` first), converted from that profile to sRGB and turned as its
+    orientation tag says (see pixels.py). The kit's conversions are upright sRGB: no steps."""
     if Path(path).suffix.lower() in ('.tif', '.tiff'):
         import tifffile
         try:
             with tifffile.TiffFile(path) as tif:
                 page = tif.pages[0]
                 img = page.asarray()
-                icc = 34675 in page.tags
+                orientation, icc = pixels.tiff_tags(page)
         except (OSError, ValueError, tifffile.TiffFileError) as e:
             raise CleanError(f'cannot read image: {e}') from e
         if img.ndim != 3 or img.shape[2] not in (3, 4) or img.dtype not in (np.uint8, np.uint16):
@@ -117,14 +125,27 @@ def load(path):
         if img.dtype == np.uint16 and not icc:
             raise CleanError('16-bit TIFF without a color profile: this looks like a linear scan master; '
                              'convert it first')
-        return np.ascontiguousarray(img[..., :3])
+        img = np.ascontiguousarray(img[..., :3])
+    else:
+        try:
+            with Image.open(path) as im:
+                if im.mode not in ('RGB', 'L', 'P', 'RGBA'):
+                    raise CleanError(f'{im.mode} image; clean works on 8-bit converted viewing copies')
+                orientation, icc = pixels.tags(im)
+                img = np.array(im if im.mode == 'L' else im.convert('RGB'))   # writable: clean works on it in place
+        except (OSError, ValueError) as e:
+            raise CleanError(f'cannot read image: {e}') from e
+    steps = []
     try:
-        with Image.open(path) as im:
-            if im.mode not in ('RGB', 'L', 'P', 'RGBA'):
-                raise CleanError(f'{im.mode} image; clean works on 8-bit converted viewing copies')
-            return np.array(im.convert('RGB'))   # writable: clean works on it in place
-    except (OSError, ValueError) as e:
-        raise CleanError(f'cannot read image: {e}') from e
+        img, profile = pixels.to_srgb(img, icc)
+    except pixels.ProfileError as e:
+        raise CleanError(str(e)) from e
+    if profile:
+        steps.append({'step': 'to_srgb', 'from': profile, 'method': pixels.method()})
+    turned = pixels.upright(img, orientation)
+    if turned is not img:
+        steps.append({'step': 'upright', 'orientation': orientation})
+    return turned, steps
 
 
 def save(img, dest):
@@ -172,11 +193,10 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
     if any(len(s) not in (2, 3) or (len(s) == 3 and s[2] < 1) for s in spots):
         raise CleanError('a spot is X,Y or X,Y,R, with a radius of at least 1 pixel')
     digest = sha(source)
-    img = load(source)
+    img, steps = load(source)
     view = restore.to8   # decisions on 8 bits; for an 8-bit image this is the image itself
     h, w = img.shape[:2]
     bits = 16 if img.dtype == np.uint16 else 8
-    steps = []
 
     ck = Checkpoints(checkpoints) if checkpoints else None
 
