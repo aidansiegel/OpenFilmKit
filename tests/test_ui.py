@@ -357,6 +357,22 @@ class App(unittest.IsolatedAsyncioTestCase):
         time.sleep(0.5)
         self.assertEqual(ran, [['models', 'one']])
 
+    async def test_nothing_is_updated_once_the_app_is_closing(self):
+        """An event from the table, or a thread's hand-off, can still be waiting when the screen is
+        taken down: looking for the table then ended the app with an error (NoMatches)."""
+        app = ui_app.OpenFilmKitApp(self.roll)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+        self.assertFalse(app.is_running)
+        app.row_moved()                    # as the message loop runs them for an event that was waiting
+        app.place_moved(None)
+        late = []
+        closing = mock.PropertyMock(side_effect=[True, False])    # open when the thread asks, closing at its turn
+        with mock.patch.object(app, 'call_from_thread', lambda fn, *args: fn(*args)), \
+                mock.patch.object(ui_app.OpenFilmKitApp, 'is_running', closing):
+            app.from_thread(late.append, 'too late')
+        self.assertEqual(late, [])
+
     async def test_panning_shows_the_new_part(self):
         app = ui_app.OpenFilmKitApp(self.roll)
         regions = []

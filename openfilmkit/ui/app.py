@@ -356,10 +356,13 @@ class OpenFilmKitApp(App):
     def from_thread(self, fn, *args):
         """Hand work back to the UI from a background thread, unless the app has closed meanwhile
         (quitting while a preview loads, say): then there's nothing left to update."""
+        def unless_closing():   # asked again at its turn on the UI's thread: closing may have begun while it waited
+            if self.is_running:
+                fn(*args)
         if not self.is_running:
             return
         try:
-            self.call_from_thread(fn, *args)
+            self.call_from_thread(unless_closing)
         except RuntimeError:
             pass
 
@@ -429,12 +432,17 @@ class OpenFilmKitApp(App):
         return ("This terminal can't show images, and there's no screen here to open an image viewer on, "
                 'so the preview is a low-resolution guide made of colored blocks. z zooms in for a closer look.')
 
+    # An event from the table or the list can still be waiting when the app closes and the screen is
+    # taken down, as Textual's test pilot does it: the widgets these look for are gone by then.
     @on(DataTable.RowHighlighted, '#frames')
     def row_moved(self):
-        self.show_item()
+        if self.is_running:
+            self.show_item()
 
     @on(ListView.Highlighted, '#places')
     def place_moved(self, event):
+        if not self.is_running:
+            return
         index = self.query_one('#places', ListView).index
         if index is not None and self.places[index][1] != self.place:
             self.place = self.places[index][1]
