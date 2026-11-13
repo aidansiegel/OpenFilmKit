@@ -345,7 +345,12 @@ def changes(source, cleaned, side=1200, level=8, band=1024, region=None):
         padded = np.zeros((-(-rows // f) * f, sw * f), bool)
         padded[:rows, :cols] = diff
         marks[y0 // f:y0 // f + padded.shape[0] // f] |= padded.reshape(-1, f, sw, f).any(axis=(1, 3))
-    small = np.asarray(Image.fromarray(b).resize((sw, sh), Image.BOX)).copy()
+    # Shown at the size before_image() gives the original, so the two halves of side_by_side() match;
+    # the marks, made on the coarser grid of the whole-number factor, are spread onto it.
+    im = Image.fromarray(b)
+    im.thumbnail((side, side), Image.BOX)
+    small = np.asarray(im).copy()
+    marks = np.asarray(Image.fromarray(marks).resize(im.size, Image.NEAREST))
     grown = marks.copy()                       # a pixel wider, so a speck is visible at a glance
     grown[1:] |= marks[:-1]
     grown[:-1] |= marks[1:]

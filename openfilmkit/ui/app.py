@@ -37,6 +37,8 @@ SETTLE = 0.15      # seconds a preview waits for the keys to stop, so a flurry o
 KEEP = 12          # previews kept, so going back to one is instant
 MOST_ZOOM = 32     # z doubles the zoom up to this
 BLOCKY = textual_image.renderable.Image in (Halfcell, Unicode)   # no pixels here: colored blocks only
+SHIFT_CLICKS_TO_US = '\x1b[>1s'          # XTSHIFTESCAPE 1: shift-clicks are reported, not kept
+SHIFT_CLICKS_TO_TERMINAL = '\x1b[>0s'    # and 0: the terminal's again (to extend a selection)
 
 
 def configured():
@@ -166,7 +168,8 @@ class Preview(Image, Renderable=InPlaceTGP if Image._Renderable is TGP else Imag
         offset = event.get_content_offset(self)
         size = self.content_size
         if offset is not None and size.width and size.height:
-            self.app.preview_clicked((offset.x + 0.5) / size.width, (offset.y + 0.5) / size.height)
+            self.app.preview_clicked((offset.x + 0.5) / size.width, (offset.y + 0.5) / size.height,
+                                     shift=event.shift)
 
     def on_unmount(self):
         if issubclass(self._Renderable, InPlaceTGP):   # freed, so quitting leaves nothing in the terminal
@@ -183,7 +186,8 @@ class HelpScreen(ModalScreen):
             ('b', 'flip the preview between after (the cleaned copy) and before (the original), in place'),
             ('B', 'before and after side by side (again: back to after)'),
             ('^⇧B', 'side by side with every pixel changed by more than 8 levels in red (ctrl+b too)'),
-            ('z  Z', 'zoom in and out (a click on the preview zooms in there; escape: all of it)'),
+            ('z  Z', 'zoom in and out (a click on the preview zooms in there, a shift-click out; '
+                     'escape: all of it)'),
             ('hjkl', 'move around a zoomed picture (shift+arrows too)'),
             ('s', 'mark missed spots: click them on the after picture (again: unmark); [ ] resize the last'),
             ('C', 'collect what the queue has finished'),
@@ -251,6 +255,7 @@ class OpenFilmKitApp(App):
         self.wanted = 0                  # the newest preview asked for; older loads are dropped
         self.previews = OrderedDict()    # (paths, view, region, mtimes) -> (image, caption)
         self.told_blocky = False
+        self.took_shift_clicks = False   # whether the terminal was asked to report shift-clicks
         self.running = {}                # key(item) -> what's being done to it
         self.pending = deque()           # commands waiting their turn: (argv, about, doing)
         self.runner = False              # whether run_commands is working through them
@@ -275,6 +280,12 @@ class OpenFilmKitApp(App):
         yield Footer()
 
     def on_mount(self):
+        driver = getattr(self, '_driver', None)        # Textual has no public way to write to it
+        if driver is not None and not self.is_headless:
+            # XTSHIFTESCAPE: terminals keep a shift-click for extending a selection (Ghostty's
+            # mouse-shift-capture, xterm's own) unless the program asks for it. run() hands it back.
+            driver.write(SHIFT_CLICKS_TO_US)
+            self.took_shift_clicks = True
         table = self.query_one('#frames', DataTable)
         table.add_columns(' ', 'frame', 'master', 'conversion', 'cleaned', 'state')
         self.query_one('#queue').display = bool(self.queues)
@@ -465,9 +476,10 @@ class OpenFilmKitApp(App):
         except OSError as e:
             self.notify(str(e), severity='warning')
 
-    def preview_clicked(self, fx, fy):
+    def preview_clicked(self, fx, fy, shift=False):
         """A click at (fx, fy), fractions across and down the preview: zoom in there, or, while
-        marking spots, mark or unmark one on the after picture."""
+        marking spots, mark or unmark one on the after picture. A shift-click zooms out there,
+        marking spots or not."""
         item = self.current()
         for n, (x0, x1, y0, y1) in enumerate(self.panels):
             if x0 <= fx <= x1 and y0 <= fy <= y1:
@@ -477,9 +489,9 @@ class OpenFilmKitApp(App):
         l, t, r, b = self.region() or (0, 0, 1, 1)
         px = l + (fx - x0) / (x1 - x0) * (r - l)  # where on the whole picture
         py = t + (fy - y0) / (y1 - y0) * (b - t)
-        if not self.spotting:
+        if shift or not self.spotting:
             self.center = (px, py)
-            self.action_zoom(2)
+            self.action_zoom(0.5 if shift else 2)
             return
         after = {'after': 0, 'side by side': 1, 'fixes': 1}.get(self.view)
         if not (item and item.latest) or after != n:
@@ -715,4 +727,10 @@ class OpenFilmKitApp(App):
 
 
 def run(folder='.'):
-    OpenFilmKitApp(folder).run()
+    app = OpenFilmKitApp(folder)
+    try:
+        app.run()
+    finally:
+        if app.took_shift_clicks and sys.__stdout__:   # the terminal's own use of shift-click, back
+            sys.__stdout__.write(SHIFT_CLICKS_TO_TERMINAL)
+            sys.__stdout__.flush()

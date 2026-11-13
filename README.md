@@ -95,7 +95,8 @@ copy in plain words, a preview, and the queue and its workers if one is set up.
   same way), in place, so small fixes stand out; `B` shows them side by side; `ctrl+shift+b` side
   by side with every fixed pixel marked in red (`ctrl+b` too, for terminals that can't tell them
   apart).
-- `z` zooms in (up to ×32) and `Z` back out; a click on the preview zooms in where you clicked,
+- `z` zooms in (up to ×32) and `Z` back out; a click on the preview zooms in where you clicked
+  and a shift-click zooms out there,
   `h` `j` `k` `l` (or shift and the arrows) move around, and `escape` shows the whole picture again.
   Every view zooms, the red fixes too, worked out at full size for the part shown.
 - `s` marks spots the cleaning missed: click each one on the after picture (zoomed in, for

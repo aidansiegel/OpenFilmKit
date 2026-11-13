@@ -108,6 +108,24 @@ class Model(unittest.TestCase):
         red = np.all(np.asarray(picture) == (230, 30, 30), axis=2)
         self.assertTrue(red[20, 30] and red.sum() < 20)        # still there, at a tenth of the size
 
+    def test_the_fixes_are_shown_at_the_size_of_the_before_picture(self):
+        """A photo a little longer than the preview (Hopper's 1280 px against 1200) used to have its
+        marked after half shrunk by a whole factor, 2, so it came out half the size of the before."""
+        d = self.roll / 'derived'
+        base = np.full((128, 101, 3), 120, np.uint8)
+        Image.fromarray(base).save(d / 'tall-v1.png')
+        after = base.copy()
+        after[64, 50] = 200                                    # one pixel changed
+        Image.fromarray(after).save(d / 'tall-v1-clean-v1.png')
+        before = model.before_image(d / 'tall-v1.png', d / 'tall-v1-clean-v1.png', side=120)
+        marked, n = model.changes(d / 'tall-v1.png', d / 'tall-v1-clean-v1.png', side=120)
+        self.assertEqual((marked.size, n), (before.size, 1))
+        red = np.all(np.asarray(marked) == (230, 30, 30), axis=2)
+        self.assertTrue(red[60, 47] and red.sum() < 30)        # the speck, where it is, still a speck
+        both, _ = model.side_by_side(d / 'tall-v1.png', d / 'tall-v1-clean-v1.png', side=120, fixes=True)
+        (l0, r0, t0, b0), (l1, r1, t1, b1) = both.info['panels']
+        self.assertEqual((round(r0 - l0, 6), (t0, b0)), (round(r1 - l1, 6), (t1, b1)))
+
     def test_the_original_is_cropped_like_the_cleaned_copy(self):
         d = self.roll / 'derived'
         base = np.random.default_rng(1).integers(0, 255, (100, 160, 3), dtype=np.uint8)
@@ -280,6 +298,27 @@ class App(unittest.IsolatedAsyncioTestCase):
             self.assertAlmostEqual(app.center[0], 0.25 + 2 * 0.0625)    # from the corner's center at ×2
             self.assertNotIn('×', await self.caption_after(app, pilot, 'escape'))
             self.assertEqual(app.zoom, 1)
+
+    async def test_a_shift_click_zooms_out_there(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await self.caption_after(app, pilot)
+            self.assertIn('×4', await self.caption_after(app, pilot, 'z', 'z'))
+            await pilot.click('#preview', offset=(0, 0), shift=True)    # the top-left corner of what's shown
+            await pilot.pause(0.4)
+            await app.workers.wait_for_complete()
+            self.assertEqual(app.zoom, 2)
+            l, t, r, b = app.region()                                # centered on the corner clicked
+            self.assertEqual((round(r - l, 6), round(b - t, 6)), (0.5, 0.5))
+            self.assertLess(max(app.center), 0.4)
+            await pilot.click('#preview', offset=(0, 0), shift=True)
+            await pilot.pause(0.4)
+            await app.workers.wait_for_complete()
+            self.assertEqual(app.zoom, 1)
+            app.spotting = True                                      # marking spots: still zooms out
+            app.zoom = 2
+            app.preview_clicked(0.5, 0.5, shift=True)
+            self.assertEqual((app.zoom, app.spots), (1, {}))
 
     async def test_spots_are_marked_by_clicking_and_cleaned_with_the_same_options(self):
         recipe = self.roll / 'derived' / 'frame-01-v1-clean-v1.png.json'
