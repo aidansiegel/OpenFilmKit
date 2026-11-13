@@ -137,6 +137,18 @@ class Model(unittest.TestCase):
         with self.assertRaises(model.NotComparable):
             model.changes(d / 'crop-v1.png', d / 'crop-v1-clean-v1.png')
 
+    def test_a_tiff_with_a_thumbnail_first_is_shown_from_its_picture(self):
+        """The UI read a TIFF's first page, while clean reads the picture behind a leading thumbnail:
+        the preview was the thumbnail, and before and after couldn't be compared."""
+        import tifffile
+        d = self.roll / 'derived'
+        picture_ = np.random.default_rng(2).integers(0, 255, (80, 120, 3), dtype=np.uint8)
+        tifffile.imwrite(d / 'thumb-v1.tif', picture_[::10, ::10], photometric='rgb', subfiletype=1)
+        tifffile.imwrite(d / 'thumb-v1.tif', picture_, photometric='rgb', append=True)
+        Image.fromarray(picture_).save(d / 'thumb-v1-clean-v1.png')
+        self.assertEqual(model.preview_image(d / 'thumb-v1.tif').size, (120, 80))
+        self.assertEqual(model.changes(d / 'thumb-v1.tif', d / 'thumb-v1-clean-v1.png')[1], 0)
+
     def test_an_original_is_shown_the_way_clean_reads_it(self):
         """Turned by its orientation tag and in sRGB, so it lines up with its cleaned copy."""
         import imagecodecs

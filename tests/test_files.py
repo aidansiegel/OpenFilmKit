@@ -61,5 +61,29 @@ class Place(unittest.TestCase):
         self.assertFalse(files.mine(self.tmp, self.d / 'other.tif'))
 
 
+@unittest.skipIf(os.name == 'nt', 'POSIX paths')
+class Unmounted(unittest.TestCase):
+    def mounted(self, *where):
+        return mock.patch.object(files.os.path, 'ismount', lambda p: str(p) in where)
+
+    def test_a_path_on_a_drive_needs_the_drive_mounted(self):
+        cases = [('/Volumes/TRAVEL/roll/frame.tif', '/Volumes/TRAVEL'),
+                 ('/mnt/travel/photo.jpg', '/mnt/travel'),                          # its folder is the mount point
+                 ('/media/aidan/TRAVEL/roll', '/media/aidan/TRAVEL'),               # udisks
+                 ('/media/TRAVEL/roll', '/media/TRAVEL'),
+                 ('/run/media/aidan/TRAVEL/roll', '/run/media/aidan/TRAVEL')]       # Fedora's udisks
+        for path, drive in cases:
+            with self.subTest(path):
+                with self.mounted():   # /media/NAME may be a drive or a user's folder of them: the deeper is named
+                    self.assertTrue(str(files.unmounted(path)).startswith(drive))
+                with self.mounted(drive):
+                    self.assertIsNone(files.unmounted(path))
+
+    def test_elsewhere_nothing_is_asked(self):
+        with self.mounted():
+            for path in ('/home/aidan/photos/x.jpg', '/Users/aidan/x.tif', '/tmp/x', '/Volumes', '/run/media/aidan'):
+                self.assertIsNone(files.unmounted(path), path)
+
+
 if __name__ == '__main__':
     unittest.main()

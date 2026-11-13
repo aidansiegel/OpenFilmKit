@@ -60,10 +60,9 @@ def check_destination(p, estimate):
     out = p['out']
     if out.suffix.lower() not in ('.tif', '.tiff'):
         raise CaptureError('use a .tif or .tiff output filename')
-    if out.parts[:2] == ('/', 'Volumes') and len(out.parts) > 2:
-        volume = Path(*out.parts[:3])
-        if not volume.is_mount():
-            raise CaptureError(f'external volume is not mounted: {volume}')
+    drive = files.unmounted(out)   # /Volumes/NAME, /mnt/NAME, /media/...: else onto the disk under it
+    if drive:
+        raise CaptureError(f'external volume is not mounted: {drive}')
     for path in p.values():
         if path.exists():
             raise CaptureError(f'refusing to replace existing file: {path}')
@@ -201,7 +200,9 @@ def capture(runtime, out, device, plan, prof, scanner, film, options_text, estim
 
     process, heard, verified = None, queue.Queue(), None
     try:
-        with p['partial'].open('xb') as image, p['log'].open('x', buffering=1) as log:
+        # The log in UTF-8 whatever the system's own encoding: what scanimage says is decoded with
+        # U+FFFD for bytes that aren't text, and that has no place in cp1252, say.
+        with p['partial'].open('xb') as image, p['log'].open('x', buffering=1, encoding='utf-8') as log:
             process = subprocess.Popen(cmd, env=runtime.env(), stdout=image, stderr=subprocess.PIPE,
                                        start_new_session=os.name == 'posix')
             threading.Thread(target=_listen, args=(process.stderr, heard), daemon=True).start()
@@ -251,7 +252,7 @@ def capture(runtime, out, device, plan, prof, scanner, film, options_text, estim
         if process:
             _stop(process)
             try:
-                with p['log'].open('a') as log:   # what it said while stopping
+                with p['log'].open('a', encoding='utf-8') as log:   # what it said while stopping
                     while not heard.empty():
                         log.write(heard.get() or '')
             except OSError:   # the drive is full or gone, often why it failed: that is the error to report

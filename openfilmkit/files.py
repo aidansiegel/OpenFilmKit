@@ -39,6 +39,27 @@ def place(tmp, dest):
     tmp.unlink()
 
 
+def unmounted(path):
+    """Where `path`'s drive should be mounted, if nothing is mounted there; else None.
+
+    A path under /Volumes/NAME (macOS), /mnt/NAME, /media/NAME or /media/USER/NAME, or
+    /run/media/USER/NAME is taken to be on a drive mounted there. While it isn't, a file written
+    to that path lands on whatever disk is under it: the internal one, if the folder is still
+    there (on Linux it often is). Anywhere else, None."""
+    parts = Path(os.path.realpath(path)).parts   # by where links lead (~/TRAVEL to /Volumes/TRAVEL, say)
+    if parts[1:2] in (('Volumes',), ('mnt',)) and len(parts) > 2:
+        places = [parts[:3]]
+    elif parts[1:2] == ('media',) and len(parts) > 2:
+        places = [parts[:3], parts[:4]] if len(parts) > 3 else [parts[:3]]
+    elif parts[1:3] == ('run', 'media') and len(parts) > 4:
+        places = [parts[:5]]
+    else:
+        return None
+    if any(os.path.ismount(Path(*p)) for p in places):
+        return None
+    return Path(*places[-1])
+
+
 def mine(tmp, dest):
     """Whether `dest` is the finished file `tmp` (both names left on it by a stopped place())."""
     try:

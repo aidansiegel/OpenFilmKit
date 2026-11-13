@@ -162,6 +162,15 @@ class Destination(unittest.TestCase):
             with self.assertRaisesRegex(capture.CaptureError, 'refusing'):
                 capture.check_destination(capture.paths(Path(d, 'x.tif')), 0)
 
+    def test_refuses_a_drive_that_isnt_mounted(self):
+        """Only /Volumes was looked at: on Linux a scan to an unmounted /mnt or /media drive went onto
+        the internal disk, under the mount point that is still there."""
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(capture.files, 'unmounted', return_value=Path('/mnt/travel')):
+            with self.assertRaisesRegex(capture.CaptureError, 'not mounted: /mnt/travel'):
+                capture.check_destination(capture.paths(Path(d, 'roll', 'x.tif')), 0)
+            self.assertEqual(list(Path(d).iterdir()), [])
+
     def test_refuses_without_space(self):
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch('shutil.disk_usage', return_value=mock.Mock(free=10 * 1024 ** 2)):
@@ -398,8 +407,8 @@ class StandIn(unittest.TestCase):
                 raise BrokenPipeError(32, 'Broken pipe')
         with self.checked():
             self.assertEqual(self.scan('odd', progress=Closed())['status'], 'captured_verified')
-        log = Path(str(self.out) + '.scan.log').read_text()
-        self.assertIn('caf', log)
+        log = Path(str(self.out) + '.scan.log').read_text(encoding='utf-8')   # UTF-8, whatever the system's
+        self.assertIn('caf\ufffd', log)
         self.assertIn('Progress: 49%', log)                              # all of it is in the log all the same
 
     def test_the_record_is_right_even_if_writing_it_fails_at_the_end(self):

@@ -48,6 +48,19 @@ class Jobs(unittest.TestCase):
     def pack(self, src=None, **options):
         return jobs.pack_clean(src or self.src, self.queue, protect_faces=False, **options)
 
+    def test_a_result_for_a_drive_that_isnt_mounted_waits(self):
+        """A photo kept at the top of a drive: its folder is the mount point, which stays there on Linux
+        when the drive is unplugged, so the result was written onto the internal disk under it."""
+        package = self.pack()
+        jobs.run(package)
+        for to in (None, self.root / 'inbox'):
+            with mock.patch.object(jobs.files, 'unmounted', return_value=Path('/mnt/travel')), \
+                    self.assertRaisesRegex(jobs.JobError, '/mnt/travel is not mounted'):
+                jobs.collect(package, to)
+        self.assertEqual(sorted(p.name for p in self.src.parent.iterdir()), ['frame-v1.png'])
+        self.assertFalse((self.root / 'inbox').exists())
+        self.assertEqual(len(jobs.collect(package)), 1)                       # plugged in again
+
     def test_a_pack_that_fails_partway_leaves_nothing_behind(self):
         """On a full disk, say: the half-made package stayed for good, with its copy of the photo."""
         with mock.patch.object(jobs, '_copy', side_effect=OSError(28, 'No space left on device')):

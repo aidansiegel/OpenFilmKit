@@ -209,7 +209,7 @@ def _full(path):
     if path.suffix.lower() in ('.tif', '.tiff'):
         import tifffile
         with tifffile.TiffFile(path) as tif:
-            page = tif.pages[0]
+            page = pixels.tiff_page(tif)   # the picture, as clean reads it: not a thumbnail first, not a mask
             a, tags = page.asarray(), pixels.tiff_tags(page)
         a = a if a.ndim == 2 else a[..., :3]
         a = (a >> 8).astype(np.uint8) if a.dtype == np.uint16 else a.astype(np.uint8)

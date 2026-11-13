@@ -417,6 +417,10 @@ def collect(package, to=None):
     planned = []
     for d in destinations:
         folder = Path(to).expanduser().resolve() if to else Path(d['source']).parent
+        drive = files.unmounted(folder)
+        if drive:   # a photo at the top of a drive: its folder is the mount point, still there unmounted on Linux
+            raise JobError(f"{drive} is not mounted (is its drive connected?): the result is kept until it is"
+                           + ('' if to else ', or collect with --to DIR'))
         if not to and not folder.is_dir():
             # Its drive isn't connected, say. Made again, the folder would be on whatever disk is under
             # that path now (the internal one, below a Linux mount point), and the job counted as collected.
