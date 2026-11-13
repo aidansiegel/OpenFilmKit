@@ -105,6 +105,41 @@ class Queue(unittest.TestCase):
         self.assertEqual(list((self.queue / 'drop' / 'w1' / 'results').iterdir()), [])
         self.assertEqual(queues.status(self.q)['jobs'], [])
 
+    def fake_rsync(self, body):
+        """A stand-in rsync first on PATH: `body` (sh) runs first, with $last the destination."""
+        fake = self.root / 'bin'
+        fake.mkdir(exist_ok=True)
+        (fake / 'rsync').write_text(f'#!/bin/sh\nfor last; do :; done\n{body}\nexec "{shutil.which("rsync")}" "$@"\n')
+        (fake / 'rsync').chmod(0o755)
+        return mock.patch.dict(os.environ, {'PATH': f'{fake}{os.pathsep}{os.environ["PATH"]}'})
+
+    @unittest.skipIf(os.name == 'nt', 'the stand-in rsync is a shell script')
+    def test_a_cache_that_cant_take_the_queues_permissions_still_works(self):
+        """The queue's folders are setgid (2750 on manhattan). rsync -p can't copy that onto a folder
+        whose group isn't one of yours (a cache on another drive, or under /tmp on a Mac), and every
+        look at the queue said "couldn't read the queue" and no more. Seen with macOS's openrsync,
+        which sets folders' modes with or without -p. What is fetched now loses that bit.
+        The stand-in refuses, as openrsync does there, unless the bit is cleared."""
+        refuse = (f'case "$last" in "{self.root}/cache"*|"{self.root}/state-"*)\n'
+                  '  case " $* " in *" --chmod=g-s "*|*" --server "*) ;; *)\n'   # rsync's own other end: let be
+                  '    echo "rsync(1): error: drop: fchmodat (1) 1: Operation not permitted" >&2; exit 23;;\n'
+                  '  esac;;\nesac')
+        with self.fake_rsync(refuse):
+            ids = self.queue_photos()
+            self.assertEqual(self.states(), ['waiting', 'waiting'])
+            w = self.worker('w1')
+            self.assertEqual(sorted([w.once(), w.once()]), sorted(ids))
+            self.assertEqual(self.states(), ['done', 'done'])
+            code, recs = self.ofk('queue', 'collect')
+            self.assertEqual((code, len(recs)), (0, 2))
+
+    @unittest.skipIf(os.name == 'nt', 'the stand-in rsync is a shell script')
+    def test_a_queue_that_cant_be_read_says_why(self):
+        with self.fake_rsync('echo "rsync: connection unexpectedly closed" >&2; exit 12'):
+            with self.assertRaises(queues.QueueError) as e:
+                queues.status(self.q)
+        self.assertIn('connection unexpectedly closed', str(e.exception))
+
     def test_a_result_stays_in_the_queue_while_its_photos_folder_is_away(self):
         self.queue_photos()
         w = self.worker('w1')
@@ -401,8 +436,8 @@ class Queue(unittest.TestCase):
         # worker that looked during the upload fetched a job with no photo, failed it and left it.
         real, partway = queues._rsync, []
 
-        def watched(ssh_command, *args, quiet=False):
-            ok = real(ssh_command, *args, quiet=quiet)
+        def watched(ssh_command, *args, **kw):
+            ok = real(ssh_command, *args, **kw)
             if args[-1] == f'{self.queue}/jobs/' and not partway:          # the upload's first pass is over
                 partway.append(sorted(p.name for p in (self.queue / 'jobs').rglob('*') if p.is_file()))
                 self.assertIsNone(self.worker('w1').once())                 # a worker looks: nothing for it yet
@@ -820,10 +855,10 @@ class Queue(unittest.TestCase):
         w.once(), w.once()
         real = queues._rsync
 
-        def no_job_json(ssh_command, *args, quiet=False):                    # the connection drops just then
+        def no_job_json(ssh_command, *args, **kw):                           # the connection drops just then
             if any(not a.startswith('-') and a.endswith('/job.json') for a in map(str, args)):
                 return False
-            return real(ssh_command, *args, quiet=quiet)
+            return real(ssh_command, *args, **kw)
         with mock.patch.object(queues, '_rsync', no_job_json):
             recs = queues.collect(self.q, to=self.root / 'inbox', say=lambda *a: None)
         self.assertEqual([('error' in r) for r in recs], [True, True])

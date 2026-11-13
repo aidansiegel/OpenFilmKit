@@ -64,10 +64,11 @@ def _ssh(h, command, capture=True):
     return r
 
 
-def _rsync(h, *args):
+def _rsync(h, *args, pull=False):
     if not shutil.which('rsync'):
         raise RemoteError('rsync not found here')
-    argv = ['rsync', '-rpt', '--partial', '-e', h['ssh_command'], *args]   # no links brought along (see queues._rsync)
+    # No links brought along, and what is fetched loses the setgid bit (see queues._rsync).
+    argv = ['rsync', '-rpt', *(['--chmod=g-s'] if pull else []), '--partial', '-e', h['ssh_command'], *args]
     if subprocess.run(argv).returncode:
         raise RemoteError(f'copying to or from {h["name"]} failed (rsync)')
 
@@ -128,7 +129,7 @@ def run_on(name, packages, to=None, keep=False, say=print):
                 raise RemoteError(f'on {h["name"]}: {why}')
             if not jobs.done(p):
                 (p / 'out').mkdir(exist_ok=True)
-                _rsync(h, f'{h["ssh"]}:{path}/out/', f'{p}/out/')
+                _rsync(h, f'{h["ssh"]}:{path}/out/', f'{p}/out/', pull=True)
             if not jobs.done(p):   # checks the result against its recipe
                 raise RemoteError(f'the job did not finish on {h["name"]}; run the same command again to resume it')
             record = jobs.collect(p, to)   # one recipe per destination

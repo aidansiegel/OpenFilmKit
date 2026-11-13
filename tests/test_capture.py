@@ -68,7 +68,8 @@ class Plan(unittest.TestCase):
         self.assertTrue(any(PATCH in w for w in warnings))
 
     def test_unprofiled_scanner_needs_choices(self):
-        with self.assertRaisesRegex(scanners.PlanError, '--source'):
+        # Both named at once: it used to take a run to learn of --source and another for --dpi.
+        with self.assertRaisesRegex(scanners.PlanError, r'--source from: .*Flatbed.*; and --dpi'):
             scanners.plan(TEST)
         with self.assertRaisesRegex(scanners.PlanError, '--dpi'):
             scanners.plan(TEST, source='Flatbed')
@@ -512,6 +513,18 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual(record['scanner']['status'], 'no-table')
             self.assertIn('--resolution=75', record['command'])
             self.assertEqual(record['tiff']['dpi_x'], 75.0)
+
+    def test_a_scan_refused_for_room_doesnt_say_it_started(self):
+        """It said "Scanning ... to frame-01.tif" and then "Capture failed: only 0.86 GiB free"."""
+        small = ['--device', 'test:0', '--source', 'Flatbed', '--dpi', '75']
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(capture, 'MIN_FREE', 1 << 60):
+            path = Path(d, 'roll-01')
+            self.assertEqual(self.kit('roll', 'new', str(path))[0], 0)
+            code, out, err = self.kit('scan', str(path), *small)
+            self.assertEqual(code, 1)
+            self.assertNotIn('Scanning', out + err)
+            self.assertIn('Not scanned: only', err)
+            self.assertEqual(list((path / 'masters').glob('*')), [])
 
     def test_full_area_scan_covers_the_whole_range(self):
         # The test backend selects 80 x 80 mm by default out of 200 x 200 mm.

@@ -129,13 +129,22 @@ def _spec(spec):
     return f'{host}:{path[2:]}' if path.startswith('~/') else spec
 
 
-def _rsync(ssh_command, *args, quiet=False):
+def _rsync(ssh_command, *args, quiet=False, pull=False, said=None):
+    """Copy with rsync; True if it worked. `pull`: from the queue to this machine. `said`, a list,
+    gets what rsync said on stderr when `quiet` (otherwise it goes to the terminal)."""
     # -rpt, not -a: symbolic links, devices and pipes are left where they are. The queue is a shared
     # folder, and a link planted there (a job's out/ pointing at a folder on the worker, say) would
     # otherwise be brought over and followed.
-    argv = ['rsync', '-rpt', '--partial', f'--timeout={QUIET}', '-e', ssh_command, *args]
+    # What is fetched loses the setgid bit (--chmod=g-s): the queue's folders have it, and a folder
+    # can't be given it where its group isn't one of ours (a cache on another drive, or under /tmp
+    # on a Mac), so the copy failed. Leaving out -p isn't enough: macOS's openrsync sets folders'
+    # modes regardless, and applies --chmod only with -p.
+    argv = ['rsync', '-rpt', *(['--chmod=g-s'] if pull else []), '--partial', f'--timeout={QUIET}',
+            '-e', ssh_command, *args]
     r = subprocess.run(argv, stdout=subprocess.DEVNULL if quiet else None,
-                       stderr=subprocess.DEVNULL if quiet else None)
+                       stderr=subprocess.PIPE if quiet else None, text=True, errors='replace')
+    if said is not None and r.stderr:
+        said.extend(line.strip() for line in r.stderr.splitlines() if line.strip())
     return r.returncode == 0
 
 
@@ -254,6 +263,7 @@ def pull_view(spec, ssh_command, folder):
     folder.mkdir(parents=True, exist_ok=True)
     # --ignore-times: these small files can change within a second at the same size (a redone
     # result's recipe), which rsync's quick check would miss.
+    said = []
     ok = _rsync(ssh_command, '--delete', '--ignore-times', '--include=/jobs/', '--include=/jobs/*/',
                 '--include=/jobs/*/job.json',
                 '--include=/jobs/*/rejected.json', '--include=/jobs/*/retry.json',
@@ -262,9 +272,10 @@ def pull_view(spec, ssh_command, folder):
                 '--include=/drop/*/failed/', '--include=/drop/*/failed/*/', '--include=/drop/*/failed/*/why.json',
                 '--include=/drop/*/checkpoints/', '--include=/drop/*/checkpoints/*/',
                 '--include=/drop/*/results/', '--include=/drop/*/results/*/', '--include=/drop/*/results/*/out/',
-                '--include=/drop/*/results/*/out/*.json', '--exclude=*', f'{spec}/', f'{folder}/', quiet=True)
+                '--include=/drop/*/results/*/out/*.json', '--exclude=*', f'{spec}/', f'{folder}/',
+                quiet=True, pull=True, said=said)
     if not ok:
-        raise QueueError(f"couldn't read the queue at {spec}")
+        raise QueueError(f"couldn't read the queue at {spec}" + (f': {said[-1]}' if said else ''))
     return View(folder)
 
 
@@ -491,7 +502,8 @@ def collect(q, to=None, say=print):
                 continue
             package = elsewhere(q) / jid
             (package / 'out').mkdir(parents=True, exist_ok=True)
-            _rsync(q['ssh_command'], f"{q['queue'].rstrip('/')}/jobs/{jid}/job.json", f'{package}/', quiet=True)
+            _rsync(q['ssh_command'], f"{q['queue'].rstrip('/')}/jobs/{jid}/job.json", f'{package}/',
+                   quiet=True, pull=True)
         try:
             jobs.read(package)   # the results are judged by it: without it (not fetched, say), leave them be
         except jobs.JobError as e:
@@ -502,7 +514,7 @@ def collect(q, to=None, say=print):
             shutil.rmtree(package / 'out', ignore_errors=True)
             (package / 'out').mkdir(parents=True)
             src = f"{q['queue'].rstrip('/')}/drop/{worker}/results/{jid}/out/"
-            if not _rsync(q['ssh_command'], src, f'{package}/out/', quiet=True):
+            if not _rsync(q['ssh_command'], src, f'{package}/out/', quiet=True, pull=True):
                 unfetched.append(worker)   # a dropped connection says nothing about the result: it is left alone
                 continue
             candidate = jobs.done(package)
@@ -842,7 +854,7 @@ class Worker:
             shutil.rmtree(got, ignore_errors=True)
             got.mkdir(parents=True)
             _rsync(self.s['ssh_command'], f"{self.s['queue'].rstrip('/')}/drop/{worker}/checkpoints/{jid}/",
-                   f'{got}/', quiet=True)
+                   f'{got}/', quiet=True, pull=True)
             if best is None or len(list(got.glob('*.npz'))) > len(list(best.glob('*.npz'))):
                 best = got
         if best is not None:
@@ -856,7 +868,7 @@ class Worker:
         package = self.state / 'jobs' / jid
         package.parent.mkdir(parents=True, exist_ok=True)
         if not _rsync(self.s['ssh_command'], f"{self.s['queue'].rstrip('/')}/jobs/{jid}", f'{package.parent}/',
-                      quiet=True):
+                      quiet=True, pull=True):
             raise QueueError(f"couldn't fetch job {jid[:12]}")
         self._seed_checkpoints(jid, package, view)
         self.current = jid

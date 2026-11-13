@@ -51,6 +51,7 @@ def plan(options, prof=None, dpi=None, source=None, runtime_patches=(), whole_ar
     """
     warnings = []
     cap = (prof or {}).get('capture', {})
+    choose = []   # what must be chosen: all said at once, not one run each
 
     sources = options.get('source', {}).get('choices') if 'source' in options else None
     source = source or cap.get('source')
@@ -59,7 +60,7 @@ def plan(options, prof=None, dpi=None, source=None, runtime_patches=(), whole_ar
         if len(film) == 1:
             source = film[0]
         else:
-            raise PlanError(f"choose --source from: {', '.join(map(str, sources))}")
+            choose.append(f"--source from: {', '.join(map(str, sources))}")
     if source is not None and sources is not None and source not in sources:
         raise PlanError(f"the driver offers sources {sources}, not '{source}'")
 
@@ -77,7 +78,10 @@ def plan(options, prof=None, dpi=None, source=None, runtime_patches=(), whole_ar
     if dpi is None:
         listed = opts.resolutions(options)
         hint = f" ({', '.join(map(str, listed))})" if listed else ''
-        raise PlanError(f'no profile for this scanner; choose --dpi{hint}')
+        choose.append(f'--dpi{hint}')
+    if choose:
+        raise PlanError(('no profile for this scanner; ' if prof is None else '')
+                        + 'choose ' + '; and '.join(choose))
     if not opts.allows_resolution(options, dpi):
         raise PlanError(f'the driver does not offer {dpi} dpi')
     if cap.get('dpi') and dpi not in cap['dpi']:

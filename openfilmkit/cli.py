@@ -616,12 +616,16 @@ def cmd_scan(args, out):
             if frame and interactive:
                 if _ask('Position the next frame, then press Enter (q to stop): ') == 'q':
                     break
-            out.say(f"Scanning {scanner['vendor']} {scanner['model']} at {plan['dpi']} dpi to {dest}")
+            started = False
             try:
+                # Room and a free name first, so a refusal doesn't read as a scan that started.
+                capture.check_destination(capture.paths(dest), estimate)
+                out.say(f"Scanning {scanner['vendor']} {scanner['model']} at {plan['dpi']} dpi to {dest}")
+                started = True
                 record = capture.capture(runtime, dest, name, plan, prof, scanner, film, settings,
                                          estimate, extra, progress=sys.stderr)
             except capture.CaptureError as e:
-                out.error(f'\nCapture failed: {e}')
+                out.error(f"\n{'Capture failed' if started else 'Not scanned'}: {e}")
                 records.append({'output': str(dest), 'status': 'failed_or_interrupted',
                                 'error': str(e)})
                 if interactive and roll_dir:
