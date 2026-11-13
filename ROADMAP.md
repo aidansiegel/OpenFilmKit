@@ -28,6 +28,7 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 | M7 | Terminal UI (Textual) | In progress: `openfilmkit ui` browses rolls with previews (before/after, fixes marked), recipes, cleaning (here, on a host, into a queue) and the queue. Next: a scan screen, after the first real scanner runs. |
 | M8 | First release | 0.1.0, an early release ahead of M4 and M7, so the kit can be installed and tried. |
 | M9 | Remote processing: run conversion and cleanup on another machine, or queue jobs for several | Done for `clean` in 0.6.0: `clean --on HOST` and a queue several workers take jobs from (`clean --queue`, `openfilmkit worker`), on job packages with stage checkpoints, so stopped work resumes to the same result on any machine. Next: `convert` jobs. |
+| M10 | Flatbeds with film adapters | Planned; a flatbed can be attached for testing. A holder holds several frames, so `scan --holder NAME` will preview the whole holder, find the frames (holder windows, then the gaps between frames, fitted to the format's spacing), let you review the boxes, and scan each frame as its own master; nothing after `scan` changes. `roll add` will also bring in frames the scanner's own software has already separated, with a record of where they came from. |
 
 ## Known limits
 
@@ -42,6 +43,5 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 
 ## Open questions
 
-- Flatbeds with film adapters: later release, or out of scope?
 - Camera ("DSLR") scanning: later, or out of scope?
 - Export of conversion LUTs as `.cube` files.
