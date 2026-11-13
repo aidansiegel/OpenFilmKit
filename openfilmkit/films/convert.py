@@ -15,7 +15,7 @@ import numpy as np
 import tifffile
 from PIL import Image,ImageCms
 from . import density as film_density, stocks as film_stocks
-from .. import health as scan_health, roll as rolls
+from .. import files, health as scan_health, roll as rolls
 from ..pixels import tiff_page
 Image.MAX_IMAGE_PIXELS=None
 CHANNELS=('Red','Green','Blue')
@@ -243,15 +243,19 @@ def convert(args,root=film_stocks.DATA):
         if calibrated:record['density_calibration']=calibrated
         if sha(source)!=digest:raise ValueError('Source checksum changed during conversion.')
         made[recipe].write_text(json.dumps(record,indent=2)+'\n')
-        for final,part in made.items():   # the picture, the LUT, then the recipe
-            if final.exists():raise ValueError('Refusing to overwrite '+str(final))
-            placed.append(final);part.replace(final)   # noted first: stopped just after the rename, it is still this run's to take away
+        made_sha={dest:record['output_sha256'],lutfile:record['lut_sha256'],recipe:sha(made[recipe])}
+        for final,part in made.items():   # the picture, the LUT, then the recipe; never over a file that took a name meanwhile
+            placed.append(final)   # noted first: stopped just after it took the name, it is still this run's to take away
+            try:files.place(part,final)
+            except FileExistsError:placed.pop();raise ValueError('Refusing to overwrite '+str(final)) from None
     except BaseException as e:
         # What was stopped can still hold the scratch file mapped, or a file open, in the frames of its traceback:
         # they are let go of first, since Windows deletes neither. (Deleted in a `finally` before, the scratch file
         # raised its own error there, which took the place of the Ctrl-C, and was left behind to block the next run.)
         traceback.clear_frames(e.__traceback__)
-        for leftover in (*placed,*made.values(),scratch):
+        # Only what is this run's goes: a name noted as placed that a stop left on someone else's file stays theirs.
+        ours=[f for f in placed if files.mine(made[f],f) or (not made[f].exists() and f.exists() and sha(f)==made_sha[f])]
+        for leftover in (*ours,*made.values(),scratch):
             try:leftover.unlink(missing_ok=True)
             except OSError:pass
         if isinstance(e,OSError):raise ValueError(f"couldn't write the conversion in {dest.parent}: {e.strerror or e}") from e

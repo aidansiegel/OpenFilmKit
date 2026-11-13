@@ -5,6 +5,7 @@ now live in roll folders; the bundled data is read in place (nothing writes to i
 """
 import argparse,contextlib,io,json,struct,sys,tempfile,unittest
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 try:
  import numpy as np
@@ -88,6 +89,22 @@ class Conversion(unittest.TestCase):
    for e in np.linspace(start,end,9)[1:-1]:
     raw=[int(round(65535*hi[c]*10**-(np.interp(e,L,D)-D[-1]))) for c,(L,D) in enumerate(traces)]
     out=[lut[raw[c],c] for c in range(3)];self.assertLess(max(out)-min(out),1200,(ident,e,out))
+ def test_a_file_that_takes_a_name_at_the_last_instant_is_not_replaced_nor_taken_away(self):
+  # Each name was looked at and then renamed onto, so a file put there in between was replaced; and, noted as
+  # placed first, it was then deleted with the rest of the stopped run. Each name is taken in one step now, and
+  # only this run's files are cleared.
+  self.raw();place=conversion.files.place
+  for name in ('view.jpg','view.jpg.lut.npy','view.jpg.json'):
+   for links in (True,False):
+    with self.subTest(name=name,links=links):
+     for p in self.root.glob('view.jpg*'):p.unlink()
+     def just_then(tmp,final):
+      if Path(final).name==name:Path(final).write_bytes(b'theirs')
+      return place(tmp,final)
+     no_links=mock.patch.object(conversion.files.os,'link',side_effect=OSError(1,'Operation not permitted'))
+     with mock.patch.object(conversion.files,'place',just_then),(contextlib.nullcontext() if links else no_links),self.assertRaisesRegex(ValueError,'overwrite'):
+      conversion.convert(self.args())
+     self.assertEqual({p.name:p.read_bytes() for p in self.root.iterdir() if p.name!='raw.tif'},{name:b'theirs'})
  def test_slide_capture_converts_as_a_positive(self):
   self.raw();Path(str(self.root/'raw.tif')+'.json').write_text(json.dumps({'film':'slide'}))
   r=conversion.convert(self.args(stock=None,profile=None,contrast=None))

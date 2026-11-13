@@ -415,6 +415,34 @@ class StandIn(unittest.TestCase):
         self.assertEqual((self.record()['status'], self.out.exists(), Path(str(self.out) + '.partial').exists()),
                          ('captured_verified', True, False))
 
+    def test_a_file_that_takes_the_masters_name_at_the_last_instant_is_not_replaced(self):
+        """The name was looked at and then renamed onto: a file put there in between was replaced."""
+        place = capture.files.place
+
+        def just_then(tmp, dest):
+            Path(dest).write_bytes(b'archival master')
+            return place(tmp, dest)
+        with self.checked(), mock.patch.object(capture.files, 'place', just_then), \
+                self.assertRaisesRegex(capture.CaptureError, 'appeared during capture'):
+            self.scan('fine', progress=io.StringIO())
+        self.assertEqual(self.out.read_bytes(), b'archival master')
+        self.assertTrue(Path(str(self.out) + '.partial').exists())             # the new scan, kept aside
+        self.assertEqual(self.record()['status'], 'failed_or_interrupted')
+
+    def test_a_drive_that_fills_as_a_scan_fails_doesnt_hide_why(self):
+        """What scanimage said while stopping was added to the log unguarded: on a full drive that
+        raised in place of the scan's own error, and the record stayed "starting"."""
+        real = Path.open
+
+        def full(path, mode='r', *args, **kw):
+            if path.name.endswith('.scan.log') and mode == 'a':
+                raise OSError(28, 'No space left on device')
+            return real(path, mode, *args, **kw)
+        with mock.patch.object(capture, 'inspect_tiff', side_effect=capture.CaptureError('not a TIFF')), \
+                mock.patch.object(Path, 'open', full), self.assertRaisesRegex(capture.CaptureError, 'not a TIFF'):
+            self.scan('fine', progress=io.StringIO())
+        self.assertEqual((self.record()['status'], self.record()['error']), ('failed_or_interrupted', 'not a TIFF'))
+
     def test_a_file_cut_short_is_caught_even_if_tiffinfo_lets_it_pass(self):
         """scanimage doesn't check its writes: a disk that fills mid-scan still ends with status 0."""
         lenient = self.root / 'tiffinfo'

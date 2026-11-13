@@ -29,7 +29,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import __version__
+from . import __version__, files
 from .runtime import tiffinfo
 
 PROCESSING = ('Linear RGB16 capture. No inversion, orange-mask removal, stock profile, color '
@@ -237,23 +237,32 @@ def capture(runtime, out, device, plan, prof, scanner, film, options_text, estim
         health = channel_health(p['partial'])
         with p['partial'].open('rb') as f:
             digest = hashlib.file_digest(f, 'sha256').hexdigest()
-        if p['out'].exists():
-            raise CaptureError(f"{p['out']} appeared during capture; not replacing it")
         # All that the record will say is known before the file takes its name, so that whatever
         # stops this between the two, the record written then is still the true one.
         verified = dict(record, channel_health=health, status='captured_verified', completed_utc=now(), sha256=digest,
                         bytes=p['partial'].stat().st_size, tiff=info)
-        p['partial'].rename(p['out'])
+        try:
+            files.place(p['partial'], p['out'])   # never over a file that took the name meanwhile
+        except FileExistsError:
+            raise CaptureError(f"{p['out']} appeared during capture; not replacing it") from None
         _write_record(p['record'], verified)
         return verified
     except BaseException as exc:
         if process:
             _stop(process)
-            with p['log'].open('a') as log:   # what it said while stopping
-                while not heard.empty():
-                    log.write(heard.get() or '')
-        if verified is not None and p['out'].exists() and not p['partial'].exists():
+            try:
+                with p['log'].open('a') as log:   # what it said while stopping
+                    while not heard.empty():
+                        log.write(heard.get() or '')
+            except OSError:   # the drive is full or gone, often why it failed: that is the error to report
+                pass
+        if verified is not None and p['out'].exists() and (not p['partial'].exists()
+                                                           or files.mine(p['partial'], p['out'])):
             record = verified   # the master is whole, verified and under its name: only its record was behind
+            try:
+                p['partial'].unlink(missing_ok=True)   # its second name, if stopped just after the link
+            except OSError:
+                pass
         else:
             record.update(status='failed_or_interrupted', ended_utc=now(), error=str(exc) or
                           type(exc).__name__, partial=str(p['partial']))

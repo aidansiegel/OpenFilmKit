@@ -38,7 +38,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from .. import __version__
+from .. import __version__, files
 from . import redeye, restore, scratches as scratch_pass
 from .checkpoints import Checkpoints
 from .. import models, pixels
@@ -332,24 +332,24 @@ def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=F
         if ck:   # stages an earlier, stopped run had finished, and where
             record['resumed_from_checkpoints'] = ck.resumed
         part.write_text(json.dumps(record, indent=2) + '\n')
-        for p in (dest, recipe_path):
-            if p.exists():
-                raise CleanError(f'refusing to overwrite {p}, which appeared while this photo was being cleaned')
-        try:
-            os.link(made, dest)     # fails if the name was taken this instant; exFAT has no links: then by renaming
-        except FileExistsError:
-            raise CleanError(f'refusing to overwrite {dest}, which appeared while this photo was being cleaned') from None
-        except OSError:
-            os.replace(made, dest)
-        os.replace(part, recipe_path)   # last: the recipe is what says the copy is done
+        if recipe_path.exists():   # before the copy takes its name, so as not to place one with no recipe to come
+            raise CleanError(f'refusing to overwrite {recipe_path}, which appeared while this photo was being cleaned')
+        for tmp, final in ((made, dest), (part, recipe_path)):   # last the recipe: it is what says the copy is done
+            try:
+                files.place(tmp, final)   # never over a file that took the name meanwhile, exFAT included
+            except FileExistsError:
+                raise CleanError(f'refusing to overwrite {final}, which appeared while this photo was being cleaned') from None
     except BaseException as e:
         # Stopped between the two: the copy is taken away again if it is this run's (told by the link, or by
         # its checksum; a file another run put there is not) and its recipe isn't in place to go with it.
         try:
             mine = dest.exists() and (os.path.samefile(made, dest) if made.exists() else sha(dest) == made_sha)
+        except OSError:
+            mine = False
+        try:   # apart: a recipe that isn't this run's (or isn't JSON) says nothing about whose the copy is
             whole = json.loads(recipe_path.read_text()).get('output_sha256') == made_sha if recipe_path.exists() else False
         except (OSError, ValueError, AttributeError):
-            mine = whole = False
+            whole = False
         if mine and not whole:
             _discard(dest)
         if isinstance(e, OSError):

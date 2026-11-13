@@ -34,7 +34,7 @@ import socket
 import time
 from pathlib import Path
 
-from . import __version__
+from . import __version__, files
 
 FORMAT = 1
 CLEAN_OPTIONS = ('crop', 'dust', 'protect_faces', 'color', 'straighten', 'lift_shadows', 'red_eye',
@@ -383,15 +383,12 @@ def _taken(dest, digest):
 
 
 def _place(tmp, dest):
-    """Give `tmp` the name `dest`, never replacing a file put there since the name was found free:
-    by a hard link, which fails if the name is taken; where the file system has none (exFAT), the
-    name is looked at again and then taken."""
+    """Give `tmp` the name `dest`, never replacing a file put there since the name was found free
+    (see files.place, exFAT included)."""
     try:
-        os.link(tmp, dest)
-    except OSError as e:
-        if isinstance(e, FileExistsError) or dest.exists():
-            raise JobError(f'{dest} appeared while this was being collected; collect again') from None
-        os.replace(tmp, dest)
+        files.place(tmp, dest)
+    except FileExistsError:
+        raise JobError(f'{dest} appeared while this was being collected; collect again') from None
 
 
 def _free(dest, digest):

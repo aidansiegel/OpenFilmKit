@@ -146,6 +146,29 @@ class Clean(unittest.TestCase):
         self.assertEqual({p.name for p in self.root.iterdir()}, {'frame-v1.jpg', 'out.png'})
         self.assertEqual(dest.read_bytes(), b'theirs')
 
+    def test_a_file_that_takes_a_name_at_the_last_instant_is_not_replaced(self):
+        """The names were looked at and then renamed onto: the recipe always, and on exFAT the copy
+        too. A file put there in between was replaced. Each name is taken in one step now."""
+        place = clean.files.place
+        for name in ('out.png', 'out.png.json'):
+            for links in (True, False):
+                with self.subTest(name=name, links=links):
+                    for p in self.root.iterdir():
+                        p.unlink()
+                    src, dest = self.write(scene()), self.root / 'out.png'
+
+                    def just_then(tmp, final):
+                        if Path(final).name == name:
+                            Path(final).write_bytes(b'theirs')
+                        return place(tmp, final)
+                    no_links = mock.patch.object(clean.files.os, 'link', side_effect=OSError(1, 'Operation not permitted'))
+                    with mock.patch.object(clean.files, 'place', just_then), \
+                            (contextlib.nullcontext() if links else no_links), \
+                            self.assertRaisesRegex(clean.CleanError, 'overwrite'):
+                        clean.clean(src, dest, protect_faces=False)
+                    self.assertEqual({p.name: p.read_bytes() for p in self.root.iterdir() if p.name != 'frame-v1.jpg'},
+                                     {name: b'theirs'})                       # theirs kept; nothing of this run's left
+
     def test_a_clean_that_fails_while_writing_leaves_nothing_behind(self):
         src = self.write(scene())
 
