@@ -19,8 +19,8 @@ from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.screen import ModalScreen
-from textual.widgets import (Button, Checkbox, DataTable, Footer, Header, Label, ListItem, ListView, RadioButton,
+from textual.screen import ModalScreen, Screen
+from textual.widgets import (Button, Checkbox, DataTable, Footer, Header, Label, RadioButton,
                              RadioSet, RichLog, Static)
 from textual_image.renderable.halfcell import Image as Halfcell
 from textual_image.renderable.tgp import Image as TGP
@@ -178,7 +178,8 @@ class Preview(Image, Renderable=InPlaceTGP if Image._Renderable is TGP else Imag
 
 class HelpScreen(ModalScreen):
     BINDINGS = [Binding('escape,q,question_mark', 'app.pop_screen', 'Close')]
-    KEYS = [('↑ ↓', 'move through the frames (← → between the list of rolls and the frames)'),
+    KEYS = [('↑ ↓', 'move through the frames; zoomed in, the arrows move the picture (hjkl too)'),
+            ('escape', 'back one step: out of marking spots, out of the zoom, to the rolls'),
             ('m', 'mark or unmark a frame; a marks every frame that needs cleaning'),
             ('v', 'convert the marked frames (or the one selected) from their scan masters'),
             ('c', 'clean the marked frames (or the one selected): here, on a host or into a queue'),
@@ -188,7 +189,6 @@ class HelpScreen(ModalScreen):
             ('^⇧B', 'side by side with every pixel changed by more than 8 levels in red (ctrl+b too)'),
             ('z  Z', 'zoom in and out (a click on the preview zooms in there, a shift-click out; '
                      'escape: all of it)'),
-            ('hjkl', 'move around a zoomed picture (shift+arrows too)'),
             ('s', 'mark missed spots: click them on the after picture (again: unmark); [ ] resize the last'),
             ('C', 'collect what the queue has finished'),
             ('r', 'look again at the files and the queue'),
@@ -203,11 +203,52 @@ class HelpScreen(ModalScreen):
                         + ('\nThis terminal shows colored blocks: a low-resolution guide.' if BLOCKY else ''))
 
 
+class RollsScreen(Screen):
+    """The rolls (or folders of photos) in the folder the UI was opened on: enter, or a click,
+    opens one; escape on its frames comes back here."""
+    BINDINGS = [Binding('r', 'fill', 'Refresh'), Binding('question_mark', 'app.help', 'Help'),
+                Binding('q', 'app.quit', 'Quit')]
+    STATES = ('to convert', 'to clean', 'cleaned')
+
+    def __init__(self, places, current=None):
+        super().__init__()
+        self.places, self.current = places, current
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(id='rolls-title')
+        yield DataTable(id='rolls', cursor_type='row', zebra_stripes=True)
+        yield Footer()
+
+    def on_mount(self):
+        table = self.query_one('#rolls', DataTable)
+        table.add_columns('roll', 'film', 'frames', *self.STATES)
+        self.action_fill()
+        table.focus()
+
+    def action_fill(self):
+        """Each roll with its film and how many of its frames are at each step (looked at again with r)."""
+        table = self.query_one('#rolls', DataTable)
+        row = table.cursor_row if table.row_count else None
+        table.clear()
+        for label, place in self.places:
+            states = [item.state for item in model.items(place)]
+            table.add_row(label, model.roll_title(place), str(len(states)),
+                          *(str(states.count(s)) for s in self.STATES))
+        if row is None:   # first time: on the roll just left, if any
+            row = next((i for i, (_, place) in enumerate(self.places) if place == self.current), 0)
+        table.move_cursor(row=min(row, len(self.places) - 1))
+        self.query_one('#rolls-title', Static).update(f'{len(self.places)} rolls · enter opens one')
+
+    @on(DataTable.RowSelected, '#rolls')
+    def chosen(self, event):
+        self.app.open_place(self.places[event.cursor_row][1])
+
+
 class OpenFilmKitApp(App):
     TITLE = 'OpenFilmKit'
     CSS = '''
-    #places { width: 24; border-right: solid $primary-darken-2; }
-    #title { padding: 0 1; color: $text-muted; height: 1; }
+    #title, #rolls-title { padding: 0 1; color: $text-muted; height: 1; }
     #frames { height: auto; max-height: 45%; }
     #detail { height: 1fr; min-height: 12; }
     #recipe { width: 1fr; padding: 0 1; overflow-y: auto; }
@@ -228,9 +269,13 @@ class OpenFilmKitApp(App):
                 Binding('B', 'show(\'side by side\')', 'Side by side'),
                 Binding('ctrl+shift+b,ctrl+b', 'show(\'fixes\')', 'Fixes', key_display='^⇧B'),
                 Binding('z,plus,equals_sign', 'zoom(2)', 'Zoom'), Binding('Z,minus', 'zoom(0.5)', 'Zoom out', show=False),
-                Binding('h,shift+left', 'pan(-1, 0)', show=False), Binding('l,shift+right', 'pan(1, 0)', show=False),
-                Binding('k,shift+up', 'pan(0, -1)', show=False), Binding('j,shift+down', 'pan(0, 1)', show=False),
-                Binding('escape', 'back', show=False),
+                # While zoomed in the arrows move the picture; otherwise check_action turns these down and
+                # they go on to the list. Priority, or the list would take them first.
+                Binding('left,h,shift+left', 'pan(-1, 0)', 'Move', key_display='←↑↓→', priority=True),
+                Binding('right,l,shift+right', 'pan(1, 0)', show=False, priority=True),
+                Binding('up,k,shift+up', 'pan(0, -1)', show=False, priority=True),
+                Binding('down,j,shift+down', 'pan(0, 1)', show=False, priority=True),
+                Binding('escape', 'back', 'Back'),
                 Binding('s', 'spotting', 'Spots'), Binding('right_square_bracket', 'resize_spot(1.5)', show=False),
                 Binding('left_square_bracket', 'resize_spot(0.667)', show=False),
                 Binding('m', 'mark', 'Mark'), Binding('a', 'mark_needing', 'Mark to clean', show=False),
@@ -266,17 +311,15 @@ class OpenFilmKitApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with Horizontal():
-            yield ListView(*[ListItem(Label(label)) for label, _ in self.places], id='places')
-            with Vertical():
-                yield Static(id='title')
-                yield DataTable(id='frames', cursor_type='row', zebra_stripes=True)
-                with Horizontal(id='detail'):
-                    yield Static(id='recipe')
-                    with Vertical(id='preview-side'):
-                        yield Static(id='preview-caption')
-                        with Container(id='preview-box'):
-                            yield Preview(id='preview')
+        with Vertical():
+            yield Static(id='title')
+            yield DataTable(id='frames', cursor_type='row', zebra_stripes=True)
+            with Horizontal(id='detail'):
+                yield Static(id='recipe')
+                with Vertical(id='preview-side'):
+                    yield Static(id='preview-caption')
+                    with Container(id='preview-box'):
+                        yield Preview(id='preview')
         yield Static(id='queue')
         yield RichLog(id='log', wrap=True, markup=True)
         yield Footer()
@@ -293,6 +336,8 @@ class OpenFilmKitApp(App):
         self.query_one('#queue').display = bool(self.queues)
         self.show_place()
         table.focus()
+        if len(self.places) > 1:   # a folder of rolls: choose one first
+            self.push_screen(RollsScreen(self.places, self.place))
         if self.queues:
             self.look_at_queue()
             self.set_interval(QUEUE_EVERY, self.look_at_queue)
@@ -348,6 +393,7 @@ class OpenFilmKitApp(App):
         if (self.key(item) if item else None) != self.shown:
             self.shown = self.key(item) if item else None
             self.zoom, self.center = 1, (0.5, 0.5)    # a new photo starts whole
+            self.refresh_bindings()
         self.query_one('#recipe', Static).update('\n'.join(model.describe(item)) if item else 'No photos here.')
         showing = (item.source, item.master, item.latest, tuple(map(tuple, self.spots.get(str(item.latest), []))))\
             if item else None
@@ -454,14 +500,26 @@ class OpenFilmKitApp(App):
         if self.is_running:
             self.show_item()
 
-    @on(ListView.Highlighted, '#places')
-    def place_moved(self, event):
-        if not self.is_running:
+    def open_place(self, place):
+        """Show `place`'s frames, chosen on the rolls screen."""
+        if not self.is_running:   # a choice still waiting as the app closes
             return
-        index = self.query_one('#places', ListView).index
-        if index is not None and self.places[index][1] != self.place:
-            self.place = self.places[index][1]
+        if isinstance(self.screen, RollsScreen):
+            self.pop_screen()
+        if place != self.place:
+            self.place, self.zoom, self.center, self.spotting = place, 1, (0.5, 0.5), False
             self.show_place()
+        self.query_one('#frames', DataTable).focus()
+        self.refresh_bindings()
+
+    def check_action(self, action, parameters):
+        if isinstance(self.screen, RollsScreen):   # the frames' keys wait behind it
+            return action in ('quit', 'help')
+        if action == 'pan':
+            return self.zoom > 1
+        if action == 'back':
+            return bool(self.spotting or self.zoom > 1 or len(self.places) > 1)
+        return True
 
     def log_line(self, text):
         log = self.query_one('#log', RichLog)
@@ -516,6 +574,7 @@ class OpenFilmKitApp(App):
     def action_zoom(self, factor):
         self.zoom = min(max(self.zoom * factor, 1), MOST_ZOOM)
         self.reframe()
+        self.refresh_bindings()   # the footer: Move and Back while zoomed in
 
     def action_pan(self, dx, dy):
         if self.zoom <= 1:
@@ -532,11 +591,15 @@ class OpenFilmKitApp(App):
         self.show_item()
 
     def action_back(self):
+        """Back one step: out of marking spots, then out of the zoom, then to the rolls."""
         if self.spotting:
             self.action_spotting()
         elif self.zoom > 1:
             self.zoom, self.center = 1, (0.5, 0.5)
             self.show_item()
+        elif len(self.places) > 1:
+            self.push_screen(RollsScreen(self.places, self.place))
+        self.refresh_bindings()
 
     def action_spotting(self):
         self.spotting = not self.spotting
@@ -544,6 +607,7 @@ class OpenFilmKitApp(App):
             self.notify('Click missed spots on the after picture (zoom in first for precision); '
                         'click a ring again to unmark it, [ and ] resize the last one, c cleans with them.')
         self.show_item()
+        self.refresh_bindings()
 
     def action_resize_spot(self, factor):
         item = self.current()

@@ -453,7 +453,7 @@ class App(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
         self.assertFalse(app.is_running)
         app.row_moved()                    # as the message loop runs them for an event that was waiting
-        app.place_moved(None)
+        app.open_place(self.root)          # a roll chosen just then
         late = []
         closing = mock.PropertyMock(side_effect=[True, False])    # open when the thread asks, closing at its turn
         with mock.patch.object(app, 'call_from_thread', lambda fn, *args: fn(*args)), \
@@ -525,6 +525,57 @@ class App(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([k for k in sent if k.get('a') == 'd' and k.get('d') != 'i'], [])
         freed = [k for k in sent if k.get('a') == 'd' and k.get('d') == 'I']
         self.assertEqual([k['i'] for k in freed], [one_id])
+
+    async def test_a_roll_is_chosen_on_a_screen_of_its_own_and_escape_goes_back_to_it(self):
+        """A folder of rolls opened at the first roll's frames, with the rolls in a narrow bar
+        beside them: there even when it held just one, the folder itself."""
+        second = self.root / 'roll-36'
+        roll.create(second, film='color-negative', stock='kodak-portra400')
+        (second / 'masters' / 'frame-01.tif').write_bytes(b'master')
+        app = ui_app.OpenFilmKitApp(self.root)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            self.assertEqual(type(app.screen).__name__, 'RollsScreen')
+            table = app.screen.query_one('#rolls')
+            rows = [[str(c) for c in table.get_row_at(i)] for i in range(table.row_count)]
+            self.assertEqual(rows, [['roll-35', 'kodak-gold200 · color-negative', '4', '1', '1', '2'],
+                                    ['roll-36', 'kodak-portra400 · color-negative', '1', '1', '0', '0']])
+            await pilot.press('down', 'enter')
+            await pilot.pause()
+            self.assertIs(app.screen, app.default_screen)
+            self.assertEqual((app.place, self.cells(app, 1)), (second, ['frame-01']))
+            await pilot.press('escape')                                     # nothing zoomed: back to the rolls
+            await pilot.pause()
+            self.assertEqual(type(app.screen).__name__, 'RollsScreen')
+            self.assertEqual(app.screen.query_one('#rolls').cursor_row, 1)  # on the roll just left
+            await pilot.press('up', 'enter')
+            await pilot.pause()
+            self.assertEqual((app.place, len(self.cells(app, 1))), (self.roll, 4))
+
+    async def test_a_single_roll_opens_at_its_frames(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            self.assertIs(app.screen, app.default_screen)
+            self.assertNotIn('places', [w.id for w in app.query('*')])      # no bar for one place
+            await pilot.press('escape')                                     # nowhere to go back to
+            await pilot.pause()
+            self.assertIs(app.screen, app.default_screen)
+
+    async def test_arrows_move_a_zoomed_picture_and_the_list_otherwise(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await self.caption_after(app, pilot)
+            table = app.query_one('#frames')
+            self.assertIn('×2', await self.caption_after(app, pilot, 'z'))
+            row, (x, y) = table.cursor_row, app.center
+            await self.caption_after(app, pilot, 'right', 'down')
+            self.assertEqual(table.cursor_row, row)                         # the frame stays
+            self.assertGreater(app.center[0], x)
+            self.assertGreater(app.center[1], y)
+            self.assertNotIn('×', await self.caption_after(app, pilot, 'escape'))
+            await pilot.press('down')
+            self.assertEqual(table.cursor_row, row + 1)                     # whole again: the list moves
 
     async def test_help_opens_and_closes(self):
         app = ui_app.OpenFilmKitApp(self.roll)
