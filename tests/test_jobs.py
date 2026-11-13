@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -55,7 +56,7 @@ class Jobs(unittest.TestCase):
         jobs.run(package)
         for to in (None, self.root / 'inbox'):
             with mock.patch.object(jobs.files, 'unmounted', return_value=Path('/mnt/travel')), \
-                    self.assertRaisesRegex(jobs.JobError, '/mnt/travel is not mounted'):
+                    self.assertRaisesRegex(jobs.JobError, re.escape(f"{Path('/mnt/travel')} is not mounted")):
                 jobs.collect(package, to)
         self.assertEqual(sorted(p.name for p in self.src.parent.iterdir()), ['frame-v1.png'])
         self.assertFalse((self.root / 'inbox').exists())

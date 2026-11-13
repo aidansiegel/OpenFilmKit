@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -167,7 +168,7 @@ class Destination(unittest.TestCase):
         the internal disk, under the mount point that is still there."""
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(capture.files, 'unmounted', return_value=Path('/mnt/travel')):
-            with self.assertRaisesRegex(capture.CaptureError, 'not mounted: /mnt/travel'):
+            with self.assertRaisesRegex(capture.CaptureError, re.escape(f"not mounted: {Path('/mnt/travel')}")):
                 capture.check_destination(capture.paths(Path(d, 'roll', 'x.tif')), 0)
             self.assertEqual(list(Path(d).iterdir()), [])
 
