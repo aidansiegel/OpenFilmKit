@@ -582,7 +582,7 @@ class App(unittest.IsolatedAsyncioTestCase):
         """The queue was a panel under the frames, taking room from the photo, with nothing to do
         there but look: retry and remove were command-line only, and the settings nowhere."""
         (self.root / 'config' / 'hosts.toml').write_text(
-            f'[queues.home]\nqueue = "{self.root / "queue"}"\n[hosts.portable]\nssh = "user@portable.local"\n'
+            f"[queues.home]\nqueue = '{self.root / 'queue'}'\n[hosts.portable]\nssh = 'user@portable.local'\n"   # literal: Windows paths
             '[worker]\nname = "mac"\nqueue = "manhattan:/srv/q"\nmemory_gb = 2.6\nhours = "22-7"\n')
         d = self.roll / 'derived'
         app = ui_app.OpenFilmKitApp(self.roll)
