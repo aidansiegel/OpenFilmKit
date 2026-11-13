@@ -269,6 +269,37 @@ class App(unittest.IsolatedAsyncioTestCase):
             self.assertLessEqual(len(made), 1)
             self.assertTrue(caption.startswith('before:'))
 
+    async def ran(self, app, pilot, *keys):
+        """Press `keys`, Go in the dialog, and wait for the commands to finish."""
+        await pilot.press(*keys)
+        await pilot.click('#go')
+        for _ in range(600):
+            await pilot.pause(0.1)
+            if not app.runner and not app.pending:
+                break
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    async def test_a_command_that_failed_says_so_on_its_frames(self):
+        """A convert or clean that failed showed only in the log: the frame still said "to convert"."""
+        d = self.roll / 'derived'
+        (self.roll / 'masters' / 'frame-04.tif').write_bytes(b'master')
+        (d / 'frame-04-v1.jpg').write_bytes(b'not a picture')                   # damaged
+        app = ui_app.OpenFilmKitApp(self.roll)
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.query_one('#frames').move_cursor(row=3)                         # frame-03: only scanned
+            await self.ran(app, pilot, 'v')                                     # its master isn't a scan
+            self.assertEqual(self.cells(app, 5)[3], 'convert failed (see log)')
+            await self.ran(app, pilot, 'a', 'c')                                # frame-02's JPEG and frame-04
+            states = dict(zip(self.cells(app, 1), self.cells(app, 5)))
+            self.assertEqual((states['frame-02-v1.jpg'], states['frame-04']), ('cleaned', 'clean failed (see log)'))
+            self.assertEqual(states['frame-03'], 'convert failed (see log)')   # not touched by the clean
+            (d / 'frame-04-v1.jpg').unlink()
+            picture(d / 'frame-04-v1.jpg')                                      # mended
+            app.query_one('#frames').move_cursor(row=[n for n in self.cells(app, 1)].index('frame-04'))
+            await self.ran(app, pilot, 'c')
+            self.assertEqual(dict(zip(self.cells(app, 1), self.cells(app, 5)))['frame-04'], 'cleaned')
+
     async def test_marking_and_cleaning_on_a_host(self):
         app = ui_app.OpenFilmKitApp(self.roll)
         ran = []
@@ -369,6 +400,12 @@ class App(unittest.IsolatedAsyncioTestCase):
                 def wait(self):
                     time.sleep(0.1)
                     active.pop()
+
+                def __enter__(self):                           # as Popen: waited for at the end
+                    return self
+
+                def __exit__(self, *exc):
+                    self.wait()
 
             with mock.patch.object(ui_app.subprocess, 'Popen', Proc):
                 for n in range(20):                            # more than the threads previews share

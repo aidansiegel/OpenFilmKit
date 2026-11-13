@@ -257,6 +257,8 @@ class OpenFilmKitApp(App):
         self.told_blocky = False
         self.took_shift_clicks = False   # whether the terminal was asked to report shift-clicks
         self.running = {}                # key(item) -> what's being done to it
+        self.failed = {}                 # key(item) -> how its last command ended, when that was badly
+        self.cleaned_before = {}         # key(item) -> its cleaned copies when its command started
         self.pending = deque()           # commands waiting their turn: (argv, about, doing)
         self.runner = False              # whether run_commands is working through them
         self.hosts, self.queues = configured()
@@ -311,6 +313,8 @@ class OpenFilmKitApp(App):
     def state_of(self, item):
         if self.key(item) in self.running:
             return self.running[self.key(item)]
+        if self.key(item) in self.failed:
+            return self.failed[self.key(item)]
         job = self.jobs.get(str(item.source)) if item.source else None
         if job:
             where = f" on {job['worker']}" if job.get('worker') else ''
@@ -643,6 +647,7 @@ class OpenFilmKitApp(App):
         it's `about` meanwhile."""
         for k in about:
             self.running[k] = 'waiting'
+            self.failed.pop(k, None)
         self.pending.append((argv, about, doing))
         if not self.runner:
             self.runner = True
@@ -661,10 +666,23 @@ class OpenFilmKitApp(App):
 
     def _doing(self, about, doing):
         for k in about:
-            if doing:
-                self.running[k] = doing
+            self.running[k] = doing
+            self.cleaned_before[k] = next((len(i.cleaned) for i in self.items if self.key(i) == k), 0)
+        self.fill_table()
+
+    def _ended(self, about, verb, ok):
+        """A command is over: its frames shown as they now are, and those it failed for marked so
+        (a clean of several that ends badly may have done some: only those with no new copy)."""
+        for k in about:
+            self.running.pop(k, None)
+        self.action_refresh(False)   # new files have new names: shown if they're this photo's
+        for k in about:
+            item = next((i for i in self.items if self.key(i) == k), None)
+            if ok or (verb == 'clean' and item and len(item.cleaned) > self.cleaned_before.get(k, 0)):
+                self.failed.pop(k, None)
             else:
-                self.running.pop(k, None)
+                self.failed[k] = f'{verb} failed (see log)'
+            self.cleaned_before.pop(k, None)
         self.fill_table()
 
     @work(thread=True, group='commands')
@@ -685,17 +703,19 @@ class OpenFilmKitApp(App):
         a time, since cleaning a big scan takes most of a small machine's memory), showing what it says."""
         self.from_thread(self._doing, about, doing)
         self.from_thread(self.log_line, f'[b]openfilmkit {" ".join(argv)}[/b]')
+        ok = False
         try:
-            proc = subprocess.Popen([sys.executable, '-m', 'openfilmkit', *argv], stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, bufsize=1)
-            for line in proc.stdout:
-                self.from_thread(self.log_line, line.rstrip())
-            proc.wait()
-            self.from_thread(self.log_line, '[green]done[/green]' if proc.returncode == 0
+            with subprocess.Popen([sys.executable, '-m', 'openfilmkit', *argv], stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True, bufsize=1) as proc:   # its pipe closed after
+                for line in proc.stdout:
+                    self.from_thread(self.log_line, line.rstrip())
+            ok = proc.returncode == 0
+            self.from_thread(self.log_line, '[green]done[/green]' if ok
                              else f'[red]ended with status {proc.returncode}[/red]')
+        except OSError as e:   # it couldn't be started: said, and the commands after it still run
+            self.from_thread(self.log_line, f"[red]couldn't run it: {e}[/red]")
         finally:
-            self.from_thread(self._doing, about, None)
-            self.from_thread(self.action_refresh, False)   # new files have new names: shown if they're this photo's
+            self.from_thread(self._ended, about, argv[0], ok)
 
     @work(thread=True, exclusive=True, group='queue')
     def look_at_queue(self):
