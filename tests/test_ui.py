@@ -622,21 +622,19 @@ class App(unittest.IsolatedAsyncioTestCase):
             self.assertIs(app.screen, app.default_screen)
 
     async def test_the_log_makes_way_for_the_photo_unless_something_failed(self):
+        # The timer is LOG_STAYS seconds (left long here) and runs _log_away: called as it would be,
+        # so a slow machine can't make the test race it.
         app = ui_app.OpenFilmKitApp(self.roll)
-        with mock.patch.object(ui_app, 'LOG_STAYS', 0.2):
-            await self.log_makes_way(app)
-
-    async def log_makes_way(self, app):
         async with app.run_test(size=(120, 40)) as pilot:
             log = app.query_one('#log')
             app.start_command(['--version'], [], 'asking…')                 # goes well
             await self.ran_out(app, pilot)
             self.assertTrue(log.display)                                    # up while it ran, and a moment after
-            await pilot.pause(0.5)
+            app._log_away()
             self.assertFalse(log.display)
             app.query_one('#frames').move_cursor(row=3)
             await self.ran(app, pilot, 'v')                                 # frame-03's master isn't a scan
-            await pilot.pause(0.5)
+            app._log_away()
             self.assertTrue(log.display)                                    # stays, to say why
             await pilot.press('L')
             self.assertFalse(log.display)
