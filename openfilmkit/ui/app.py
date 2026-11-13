@@ -15,6 +15,8 @@ from collections import OrderedDict, deque
 from pathlib import Path
 
 import textual_image.renderable  # asks the terminal what it can draw, before Textual starts
+from rich.markup import escape
+from rich.text import Text
 from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -32,6 +34,7 @@ from .. import __version__
 from . import model
 
 QUEUE_EVERY = 30   # seconds between looks at the queue
+LOG_STAYS = 8      # seconds the command log stays up after commands all went well
 VIEWS = ('after', 'before', 'side by side', 'fixes')   # b flips after/before; B, ctrl+shift+b side by side
 SETTLE = 0.15      # seconds a preview waits for the keys to stop, so a flurry of presses loads one
 KEEP = 12          # previews kept, so going back to one is instant
@@ -42,13 +45,18 @@ SHIFT_CLICKS_TO_TERMINAL = '\x1b[>0s'    # and 0: the terminal's again (to exten
 
 
 def configured():
-    """({hosts}, {queues}) from hosts.toml, for the clean dialog and the queue panel."""
+    """({hosts}, {queues}) from hosts.toml, for the clean dialog and the queue screen."""
+    cfg = settings()
+    return cfg.get('hosts', {}), cfg.get('queues', {})
+
+
+def settings():
+    """hosts.toml as read ({} where there is none, or it can't be read)."""
     try:
         from ..queues import _config
-        cfg = _config()
+        return _config()
     except Exception:   # an unreadable hosts.toml shouldn't keep the UI from starting
-        return {}, {}
-    return cfg.get('hosts', {}), cfg.get('queues', {})
+        return {}
 
 
 class CleanDialog(ModalScreen):
@@ -190,7 +198,9 @@ class HelpScreen(ModalScreen):
             ('z  Z', 'zoom in and out (a click on the preview zooms in there, a shift-click out; '
                      'escape: all of it)'),
             ('s', 'mark missed spots: click them on the after picture (again: unmark); [ ] resize the last'),
+            ('w', 'the queue: its jobs and workers, retry or remove a job, and the settings'),
             ('C', 'collect what the queue has finished'),
+            ('L', 'show or hide the command log (it shows while commands run, and stays after one fails)'),
             ('r', 'look again at the files and the queue'),
             ('q', 'quit')]
 
@@ -245,18 +255,144 @@ class RollsScreen(Screen):
         self.app.open_place(self.places[event.cursor_row][1])
 
 
+class QueueScreen(Screen):
+    """The queues in hosts.toml: their jobs (with why one waits or failed) and workers, and how this
+    machine is set up. t tries a failed job again, x (twice) takes a job out, C collects."""
+    BINDINGS = [Binding('escape', 'app.pop_screen', 'Back'), Binding('C', 'app.collect', 'Collect'),
+                Binding('t', 'retry', 'Retry failed'), Binding('x', 'remove', 'Remove job'),
+                Binding('r', 'look', 'Refresh'), Binding('question_mark', 'app.help', 'Help'),
+                Binding('q', 'app.quit', 'Quit')]
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []          # (queue name, job row) for each line of #jobs
+        self.removing = None    # the job x was pressed on once, to be pressed on again
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(id='queue-title')
+        yield DataTable(id='jobs', cursor_type='row', zebra_stripes=True)
+        yield Static('Workers', id='workers-title')
+        yield DataTable(id='workers', cursor_type='row', zebra_stripes=True)
+        yield Static('Settings', id='setup-title')
+        yield Static(id='setup')
+        yield Footer()
+
+    def on_mount(self):
+        self.query_one('#jobs', DataTable).add_columns('queue', 'job', 'photo', 'state', 'worker', 'why')
+        self.query_one('#workers', DataTable).add_columns('queue', 'worker', 'doing', 'memory', 'hours', 'last seen')
+        self.fill()
+        self.query_one('#jobs', DataTable).focus()
+
+    def fill(self):
+        from .. import queues
+        app = self.app
+        jobs, workers = self.query_one('#jobs', DataTable), self.query_one('#workers', DataTable)
+        row = jobs.cursor_row
+        jobs.clear()
+        workers.clear()
+        self.rows = []
+        said = []
+        for name in app.queues:
+            info = app.queue_info.get(name)
+            if info is None:
+                said.append(f'{name}: looking…')
+                continue
+            if 'error' in info:
+                said.append(f"{name}: [red]{escape(info['error'])}[/red]")
+                continue
+            for job in info['jobs']:
+                why = job.get('why_waiting') or job.get('error') or ''
+                state = job['state'] + (f" (try {job['tries']})" if job.get('tries', 1) > 1 else '')
+                jobs.add_row(name, job['id'][:12], Text(Path(job['photo']).name) if job.get('photo') else '—', state,
+                             Text(job.get('worker') or '—'), Text(why.splitlines()[0][:80] if why else ''))
+                self.rows.append((name, job))
+            for w in info['workers']:
+                doing = f"running {w['running'][:12]}" if w.get('running') else 'idle'
+                seen = (f"not for {queues.ago(w['seen_ago_s'])}" if w['silent'] else f"{queues.ago(w['seen_ago_s'])} ago")
+                workers.add_row(name, Text(str(w['name'])), doing, f"{w.get('memory_gb')} GB",
+                                Text(str(w.get('hours') or 'any')), seen)
+            said.append(f"{name}: {len(info['jobs'])} job{'s' if len(info['jobs']) != 1 else ''}, "
+                        f"{len(info['workers'])} worker{'s' if len(info['workers']) != 1 else ''}")
+        if self.rows:
+            jobs.move_cursor(row=min(row or 0, len(self.rows) - 1))
+        self.query_one('#queue-title', Static).update(
+            ' · '.join(said) if said else 'No queue set up: see Settings below.')
+        self.query_one('#setup', Static).update(Text(self.setup()))   # [worker] is a file's words, not markup
+
+    @staticmethod
+    def setup():
+        """hosts.toml in plain words: what the clean dialog offers, and this machine as a worker."""
+        from ..queues import config_file
+        cfg = settings()
+        lines = [f'From {config_file()} (edit it to change these; r reads it again)']
+        for name, q in (cfg.get('queues') or {}).items():
+            lines.append(f"  queue {name}: {q.get('queue', '?') if isinstance(q, dict) else '?'}")
+        for name, h in (cfg.get('hosts') or {}).items():
+            lines.append(f"  host {name} (clean --on): {h.get('ssh', '?') if isinstance(h, dict) else '?'}")
+        w = cfg.get('worker')
+        if isinstance(w, dict):
+            lines.append(f"  this machine as a worker: {w.get('name', 'its own name')}, for {w.get('queue', '?')}, "
+                         f"up to {w.get('memory_gb', 2.5)} GB, hours {w.get('hours', 'any')}"
+                         + (f", busy when: {'; '.join(map(str, w['busy_when']))}" if w.get('busy_when') else ''))
+        else:
+            lines.append('  this machine is not set up as a worker ([worker] in that file; `openfilmkit worker --help`)')
+        if len(lines) == 2 and not cfg:
+            lines.insert(1, '  nothing there yet: see the README, "Remote processing"')
+        return '\n'.join(lines)
+
+    def chosen(self):
+        jobs = self.query_one('#jobs', DataTable)
+        if not self.rows or jobs.cursor_row is None or jobs.cursor_row >= len(self.rows):
+            return None
+        return self.rows[jobs.cursor_row]
+
+    def action_look(self):
+        self.app.hosts, self.app.queues = configured()
+        self.fill()
+        if self.app.queues:
+            self.app.look_at_queue()
+            self.notify('Looking at the queue…')
+
+    def action_retry(self):
+        """The selected job if it failed, else every failed job in its queue."""
+        got = self.chosen()
+        if got is None:
+            return
+        name, job = got
+        argv = ['queue', 'retry', name] + (['--job', job['id']] if job['state'] == 'failed' else [])
+        self.app.start_command(argv, [], 'retrying…')
+        self.notify('Workers will try ' + (f"job {job['id'][:12]} again" if job['state'] == 'failed'
+                                           else 'every failed job again'))
+
+    def action_remove(self):
+        got = self.chosen()
+        if got is None:
+            return
+        name, job = got
+        if self.removing != job['id']:
+            self.removing = job['id']
+            self.notify(f"Press x again to take job {job['id'][:12]} out of the queue {name}", severity='warning')
+            return
+        self.removing = None
+        self.app.start_command(['queue', 'remove', name, '--job', job['id']], [], 'removing…')
+
+
 class OpenFilmKitApp(App):
     TITLE = 'OpenFilmKit'
     CSS = '''
     #title, #rolls-title { padding: 0 1; color: $text-muted; height: 1; }
-    #frames { height: auto; max-height: 45%; }
+    #frames { height: auto; max-height: 35%; }
     #detail { height: 1fr; min-height: 12; }
-    #recipe { width: 1fr; padding: 0 1; overflow-y: auto; }
+    #recipe { width: 44; padding: 0 1; overflow-y: auto; }   /* the rest is the photo's */
     #preview-side { width: 1fr; height: 100%; }
     #preview-caption { height: 1; color: $text-muted; text-align: center; }
     #preview-box { height: 1fr; align: center middle; }
     #preview { width: auto; height: auto; }   /* as big as fits, keeping the photo's shape */
-    #queue { height: auto; max-height: 8; border-top: solid $primary-darken-2; padding: 0 1; }
+    #jobs { height: auto; max-height: 50%; }
+    #workers-title, #setup-title { padding: 1 1 0 1; text-style: bold; height: 2; }
+    #workers { height: auto; max-height: 8; }
+    #setup { padding: 0 1; color: $text-muted; height: auto; }
     #log { height: 6; border-top: solid $primary-darken-2; display: none; }
     CleanDialog, ConvertDialog, HelpScreen { align: center middle; }
     #fixed { margin-bottom: 1; }
@@ -280,7 +416,8 @@ class OpenFilmKitApp(App):
                 Binding('left_square_bracket', 'resize_spot(0.667)', show=False),
                 Binding('m', 'mark', 'Mark'), Binding('a', 'mark_needing', 'Mark to clean', show=False),
                 Binding('v', 'convert', 'Convert…'), Binding('c', 'clean', 'Clean…'),
-                Binding('C', 'collect', 'Collect', show=False),
+                Binding('C', 'collect', 'Collect', show=False), Binding('w', 'queue_screen', 'Queue'),
+                Binding('L', 'toggle_log', 'Log', show=False),
                 Binding('r', 'refresh', 'Refresh'), Binding('question_mark', 'help', 'Help'),
                 Binding('q', 'quit', 'Quit')]
 
@@ -307,6 +444,8 @@ class OpenFilmKitApp(App):
         self.pending = deque()           # commands waiting their turn: (argv, about, doing)
         self.runner = False              # whether run_commands is working through them
         self.hosts, self.queues = configured()
+        self.queue_info = {}             # queue name -> its status() then, or {'error': ...}
+        self.batch_failed = False        # whether a command of those running now has failed
         self.sub_title = __version__
 
     def compose(self) -> ComposeResult:
@@ -320,7 +459,6 @@ class OpenFilmKitApp(App):
                     yield Static(id='preview-caption')
                     with Container(id='preview-box'):
                         yield Preview(id='preview')
-        yield Static(id='queue')
         yield RichLog(id='log', wrap=True, markup=True)
         yield Footer()
 
@@ -333,7 +471,6 @@ class OpenFilmKitApp(App):
             self.took_shift_clicks = True
         table = self.query_one('#frames', DataTable)
         table.add_columns(' ', 'frame', 'master', 'conversion', 'cleaned', 'state')
-        self.query_one('#queue').display = bool(self.queues)
         self.show_place()
         table.focus()
         if len(self.places) > 1:   # a folder of rolls: choose one first
@@ -351,9 +488,21 @@ class OpenFilmKitApp(App):
     def show_place(self, force=False):
         self.items = model.items(self.place)
         self.marked &= {self.key(i) for i in self.items}
-        self.query_one('#title', Static).update(
-            f'{self.place.name} · {model.roll_title(self.place)} · {len(self.items)} photos')
+        self.show_title()
         self.fill_table(force)
+
+    def show_title(self):
+        """The roll, and a word on the queue (its own screen has the rest: w)."""
+        line = f'{self.place.name} · {model.roll_title(self.place)} · {len(self.items)} photos'
+        for name, info in self.queue_info.items():
+            if 'error' in info:
+                line += f" · queue {name}: can't read it (w)"
+                continue
+            counts = {}
+            for row in info['jobs']:
+                counts[row['state']] = counts.get(row['state'], 0) + 1
+            line += f" · queue {name}: {', '.join(f'{n} {s}' for s, n in counts.items()) or 'empty'} (w)"
+        self.query_one('#title', Static).update(Text(line))   # names as they are, brackets and all
 
     def state_of(self, item):
         if self.key(item) in self.running:
@@ -513,8 +662,8 @@ class OpenFilmKitApp(App):
         self.refresh_bindings()
 
     def check_action(self, action, parameters):
-        if isinstance(self.screen, RollsScreen):   # the frames' keys wait behind it
-            return action in ('quit', 'help')
+        if isinstance(self.screen, (RollsScreen, QueueScreen)):   # the frames' keys wait behind them
+            return action in ('quit', 'help', 'pop_screen', 'collect', 'queue_screen')
         if action == 'pan':
             return self.zoom > 1
         if action == 'back':
@@ -648,6 +797,16 @@ class OpenFilmKitApp(App):
         if self.queues:
             self.look_at_queue()
 
+    def action_queue_screen(self):
+        if not isinstance(self.screen, QueueScreen):
+            self.push_screen(QueueScreen())
+            if self.queues:
+                self.look_at_queue()
+
+    def action_toggle_log(self):
+        log = self.query_one('#log', RichLog)
+        log.display = not log.display
+
     def action_help(self):
         self.push_screen(HelpScreen())
 
@@ -714,6 +873,7 @@ class OpenFilmKitApp(App):
             self.failed.pop(k, None)
         self.pending.append((argv, about, doing))
         if not self.runner:
+            self.batch_failed = False
             self.runner = True
             self.run_commands()
         else:
@@ -726,7 +886,13 @@ class OpenFilmKitApp(App):
         if self.pending and self.is_running:
             return self.pending.popleft()
         self.runner = False
+        if not self.batch_failed and self.is_running:   # all went well: the photo gets its room back
+            self.set_timer(LOG_STAYS, self._log_away)
         return None
+
+    def _log_away(self):
+        if not self.runner and not self.batch_failed:
+            self.query_one('#log', RichLog).display = False
 
     def _doing(self, about, doing):
         for k in about:
@@ -746,6 +912,7 @@ class OpenFilmKitApp(App):
                 self.failed.pop(k, None)
             else:
                 self.failed[k] = f'{verb} failed (see log)'
+                self.batch_failed = True
             self.cleaned_before.pop(k, None)
         self.fill_table()
 
@@ -774,40 +941,35 @@ class OpenFilmKitApp(App):
                 for line in proc.stdout:
                     self.from_thread(self.log_line, line.rstrip())
             ok = proc.returncode == 0
+            self.batch_failed |= not ok and not about   # a collect, say: no frames to mark, so the log stays
             self.from_thread(self.log_line, '[green]done[/green]' if ok
                              else f'[red]ended with status {proc.returncode}[/red]')
         except OSError as e:   # it couldn't be started: said, and the commands after it still run
             self.from_thread(self.log_line, f"[red]couldn't run it: {e}[/red]")
+            self.batch_failed = True
         finally:
             self.from_thread(self._ended, about, argv[0], ok)
 
     @work(thread=True, exclusive=True, group='queue')
     def look_at_queue(self):
         from .. import queues
-        jobs, lines = {}, []
+        jobs, infos = {}, {}
         for name in self.queues:
             try:
-                info = queues.status(queues.queue_settings(name))
+                infos[name] = queues.status(queues.queue_settings(name))
             except Exception as e:
-                lines.append(f'Queue {name}: [red]{e}[/red]')
+                infos[name] = {'error': str(e)}
                 continue
-            for row in info['jobs']:
+            for row in infos[name]['jobs']:
                 jobs[row.get('photo')] = row
-            counts = {}
-            for row in info['jobs']:
-                counts[row['state']] = counts.get(row['state'], 0) + 1
-            summary = ', '.join(f'{n} {s}' for s, n in counts.items()) or 'empty'
-            lines.append(f'Queue [b]{name}[/b]: {summary}')
-            for w in info['workers']:
-                busy = f"running {w['running'][:12]}" if w.get('running') else 'idle'
-                seen = f"not seen for {queues.ago(w['seen_ago_s'])}" if w['silent'] else f"seen {queues.ago(w['seen_ago_s'])} ago"
-                lines.append(f"  worker {w['name']}: {busy}, up to {w.get('memory_gb')} GB, {seen}")
-        self.from_thread(self._queue_seen, jobs, '\n'.join(lines))
+        self.from_thread(self._queue_seen, jobs, infos)
 
-    def _queue_seen(self, jobs, text):
-        self.jobs = jobs
-        self.query_one('#queue', Static).update(text)
+    def _queue_seen(self, jobs, infos):
+        self.jobs, self.queue_info = jobs, infos
+        self.show_title()
         self.fill_table()
+        if isinstance(self.screen, QueueScreen):
+            self.screen.fill()
 
 
 def run(folder='.'):

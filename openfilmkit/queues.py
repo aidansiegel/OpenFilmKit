@@ -388,7 +388,8 @@ def ago(seconds):
     if seconds < 7200:
         return f'{seconds // 60} minutes'
     days, hours = divmod(seconds // 3600, 24)
-    return f'{days * 24 + hours} hours' if days < 2 else f'{days} days' + (f' {hours} hours' if hours else '')
+    return f'{days * 24 + hours} hours' if days < 2 else \
+        f'{days} days' + (f" {hours} hour{'s' if hours != 1 else ''}" if hours else '')
 
 
 def _why_waiting(job, need, workers):

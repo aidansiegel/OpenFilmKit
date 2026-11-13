@@ -158,6 +158,10 @@ class Queue(unittest.TestCase):
         code, recs = self.ofk('queue', 'collect')
         self.assertEqual((code, len(recs), queues.status(self.q)['jobs']), (0, 2, []))
 
+    def test_a_time_since_is_said_in_a_few_words(self):
+        self.assertEqual([queues.ago(s) for s in (40, 720, 90000, 3 * 86400 + 3600, 3 * 86400 + 7200, 5 * 86400)],
+                         ['40 s', '12 minutes', '25 hours', '3 days 1 hour', '3 days 2 hours', '5 days'])
+
     def test_working_hours_are_read_when_the_worker_starts(self):
         """"10pm-7am" or "22" raised an error at every look at the queue, after the worker had
         reported in: a service restarting every minute that `queue status` showed as fine."""

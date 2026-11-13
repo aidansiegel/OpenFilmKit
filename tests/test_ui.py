@@ -498,7 +498,8 @@ class App(unittest.IsolatedAsyncioTestCase):
         app = ui_app.OpenFilmKitApp(self.roll)
         async with app.run_test(size=(120, 40)) as pilot:
             frame2 = str(self.roll / 'derived' / 'frame-02-v1.jpg')
-            app._queue_seen({frame2: {'state': 'running', 'worker': 'portable'}}, 'Queue home: 1 running')
+            row = {'id': 'ab' * 32, 'photo': frame2, 'state': 'running', 'worker': 'portable'}
+            app._queue_seen({frame2: row}, {'home': {'jobs': [row], 'workers': []}})
             await pilot.pause()
             self.assertEqual(self.cells(app, 5)[1], 'running on portable')
 
@@ -576,6 +577,75 @@ class App(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('×', await self.caption_after(app, pilot, 'escape'))
             await pilot.press('down')
             self.assertEqual(table.cursor_row, row + 1)                     # whole again: the list moves
+
+    async def test_the_queue_has_a_screen_of_its_own(self):
+        """The queue was a panel under the frames, taking room from the photo, with nothing to do
+        there but look: retry and remove were command-line only, and the settings nowhere."""
+        (self.root / 'config' / 'hosts.toml').write_text(
+            f'[queues.home]\nqueue = "{self.root / "queue"}"\n[hosts.portable]\nssh = "user@portable.local"\n'
+            '[worker]\nname = "mac"\nqueue = "manhattan:/srv/q"\nmemory_gb = 2.6\nhours = "22-7"\n')
+        d = self.roll / 'derived'
+        app = ui_app.OpenFilmKitApp(self.roll)
+        app.look_at_queue = lambda: None                                    # no rsync here: told below
+        ran = []
+        async with app.run_test(size=(140, 45)) as pilot:
+            app.run_command = lambda argv, about, doing: ran.append(argv)
+            self.assertNotIn('queue', [w.id for w in app.query('*')])       # off the frames screen
+            app._queue_seen({}, {'home': {'jobs': [
+                {'id': 'ab' * 32, 'photo': str(d / 'frame-02-v1.jpg'), 'state': 'failed', 'worker': 'portable',
+                 'error': 'cannot read image\nand more', 'tries': 2},
+                {'id': 'cd' * 32, 'photo': str(d / 'frame-01-v1.png'), 'state': 'waiting',
+                 'why_waiting': 'every worker runs another build'}],
+                'workers': [{'name': 'portable', 'memory_gb': 2.6, 'hours': '22-7', 'seen_ago_s': 90000, 'silent': True}]}})
+            self.assertIn('queue home: 1 failed, 1 waiting (w)', str(app.query_one('#title').render()))
+            await pilot.press('w')
+            await pilot.pause()
+            self.assertEqual(type(app.screen).__name__, 'QueueScreen')
+            jobs, workers = app.screen.query_one('#jobs'), app.screen.query_one('#workers')
+            self.assertEqual([str(c) for c in jobs.get_row_at(0)],
+                             ['home', 'abababababab', 'frame-02-v1.jpg', 'failed (try 2)', 'portable', 'cannot read image'])
+            self.assertEqual([str(c) for c in jobs.get_row_at(1)][3:], ['waiting', '—', 'every worker runs another build'])
+            self.assertEqual([str(c) for c in workers.get_row_at(0)], ['home', 'portable', 'idle', '2.6 GB', '22-7', 'not for 25 hours'])
+            setup = str(app.screen.query_one('#setup').render())
+            for words in ('queue home:', 'host portable (clean --on): user@portable.local',
+                          'this machine as a worker: mac, for manhattan:/srv/q, up to 2.6 GB, hours 22-7'):
+                self.assertIn(words, setup)
+            await pilot.press('v')                                          # the frames' keys wait behind it
+            await pilot.press('t')                                          # the failed job, again
+            await pilot.press('down', 'x')                                  # once: only asked
+            self.assertEqual(ran, [['queue', 'retry', 'home', '--job', 'ab' * 32]])
+            await pilot.press('x')
+            await pilot.pause()
+            self.assertEqual(ran[-1], ['queue', 'remove', 'home', '--job', 'cd' * 32])
+            await pilot.press('escape')
+            await pilot.pause()
+            self.assertIs(app.screen, app.default_screen)
+
+    async def test_the_log_makes_way_for_the_photo_unless_something_failed(self):
+        app = ui_app.OpenFilmKitApp(self.roll)
+        with mock.patch.object(ui_app, 'LOG_STAYS', 0.2):
+            await self.log_makes_way(app)
+
+    async def log_makes_way(self, app):
+        async with app.run_test(size=(120, 40)) as pilot:
+            log = app.query_one('#log')
+            app.start_command(['--version'], [], 'asking…')                 # goes well
+            await self.ran_out(app, pilot)
+            self.assertTrue(log.display)                                    # up while it ran, and a moment after
+            await pilot.pause(0.5)
+            self.assertFalse(log.display)
+            app.query_one('#frames').move_cursor(row=3)
+            await self.ran(app, pilot, 'v')                                 # frame-03's master isn't a scan
+            await pilot.pause(0.5)
+            self.assertTrue(log.display)                                    # stays, to say why
+            await pilot.press('L')
+            self.assertFalse(log.display)
+
+    async def ran_out(self, app, pilot):
+        for _ in range(600):
+            await pilot.pause(0.1)
+            if not app.runner and not app.pending:
+                break
 
     async def test_help_opens_and_closes(self):
         app = ui_app.OpenFilmKitApp(self.roll)
