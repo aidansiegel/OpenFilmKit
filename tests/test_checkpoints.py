@@ -186,7 +186,9 @@ class Resume(unittest.TestCase):
             return json.loads(out.getvalue())[0]
         with mock.patch.dict('os.environ', {'OPENFILMKIT_CACHE': str(cache)}), \
                 mock.patch.object(scratches, 'load_nets', stand_ins):
-            with mock.patch.object(checkpoints.Checkpoints, 'save', save), self.assertRaises(Stop):
+            # OPENFILMKIT_TRACEBACK: the stop goes straight out, as from a process that dies, with no last word.
+            with mock.patch.object(checkpoints.Checkpoints, 'save', save), self.assertRaises(Stop), \
+                    mock.patch.dict('os.environ', {'OPENFILMKIT_TRACEBACK': '1'}):
                 ofk()
             other = ofk('--color')                         # other options: other work, nothing reused
             self.assertEqual(other['resumed_from_checkpoints'], [])

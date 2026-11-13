@@ -67,7 +67,6 @@ class Checkpoints:
         return out
 
     def save(self, stage, info=None, **arrays):
-        self.folder.mkdir(parents=True, exist_ok=True)
         stored, packed = {}, {}
         for name, a in arrays.items():
             a = np.asarray(a)
@@ -80,6 +79,7 @@ class Checkpoints:
         path = self._path(stage)
         tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
         try:
+            self.folder.mkdir(parents=True, exist_ok=True)
             with open(tmp, 'wb') as f:
                 np.savez(f, _meta=np.array(json.dumps(meta)), **stored)
             os.replace(tmp, path)

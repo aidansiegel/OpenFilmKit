@@ -34,6 +34,31 @@ def tiff_tags(page):
     return int(page.tags.valueof(ORIENTATION, 1)), page.tags.valueof(ICC_PROFILE)
 
 
+def tiff_page(tif):
+    """The page of an open TIFF (a tifffile.TiffFile) that holds its picture: the first that isn't a
+    reduced copy or a mask (a thumbnail can come first, and SilverFast keeps infrared on a page of
+    its own), and only if the file can hold the image its header describes. tifffile fills what
+    is missing with zeros, so a file cut short, or one with a damaged header, otherwise reads as a
+    picture partly or wholly black, as large as the header says. ValueError otherwise."""
+    page = next((p for p in tif.pages if not p.subfiletype & 5), None)   # 1: reduced-size copy, 4: mask
+    if page is None:
+        raise ValueError('TIFF has no full-size image.')
+    offsets, counts, size = page.dataoffsets, page.databytecounts, tif.filehandle.size
+    expected = int(np.prod(page.chunked))
+    if len(offsets) != expected or len(counts) != expected:
+        raise ValueError(f'TIFF is damaged: its header describes {expected} strips or tiles and lists {len(offsets)}.')
+    if page.compression == 1 and page.is_contiguous:   # stored plainly, in one run (some programs get its strip sizes wrong)
+        cut = offsets[0] + page.nbytes > size
+    else:
+        cut = any(o <= 0 or c <= 0 or o + c > size for o, c in zip(offsets, counts))
+    if cut:
+        raise ValueError('TIFF pixel data is truncated.')
+    if page.nbytes > 2000 * max(sum(counts), 2 ** 20):   # no compression packs a picture that small
+        raise ValueError(f'TIFF is damaged: its header describes an image of {page.nbytes / 1e9:.1f} GB, '
+                         f'and it holds {sum(counts):,} bytes.')
+    return page
+
+
 def upright(img, orientation):
     """`img` turned and mirrored as its orientation tag (2 to 8) says to show it; `img` itself when
     the tag says it is upright, or nothing that makes sense."""

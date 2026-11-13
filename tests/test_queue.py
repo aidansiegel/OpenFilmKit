@@ -111,6 +111,10 @@ class Queue(unittest.TestCase):
         w.once(), w.once()
         away = self.root / 'photos-away'
         (self.root / 'photos').rename(away)                                 # the photos' drive, unplugged
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            self.assertEqual(cli.main(['queue', 'collect']), 1)
+        self.assertEqual(err.getvalue().count('not there'), 2)              # said, not only put in the JSON
         code, recs = self.ofk('queue', 'collect')
         self.assertEqual((code, ['not there' in r.get('error', '') for r in recs]), (1, [True, True]))
         self.assertFalse((self.root / 'photos').exists())
@@ -360,6 +364,10 @@ class Queue(unittest.TestCase):
             queues.queue_settings('odd')
         s = queues.worker_settings(queue='server:~/q', name='w1')
         self.assertEqual((s['queue'], s['drop']), ('server:q', 'server:q/drop/w1'))
+        self.assertEqual(queues.worker_settings(queue='server:q', name='w1', drop='')['drop'], 'server:q/drop/w1')
+        for memory in ('nan', 'inf'):                                       # neither is a size, nor JSON when reported
+            with self.assertRaisesRegex(queues.QueueError, 'memory_gb'):
+                queues.worker_settings(queue='server:q', name='w1', memory_gb=float(memory))
 
     def test_a_job_packed_elsewhere_stays_a_strangers_after_a_collect_that_failed(self):
         """`collect --to` fetched a stranger's job.json into the outbox, which is what marks a job as

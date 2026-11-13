@@ -22,6 +22,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import weakref
 from collections import namedtuple
 from pathlib import Path
 from unittest import mock
@@ -71,7 +72,7 @@ class Stop:
 
     def __init__(self, root, at=None, how=None):
         self.root, self.at, self.how = str(root), at, how
-        self.calls, self.inside = [], 0
+        self.calls, self.inside, self.mapped = [], 0, {}
 
     def wrap(self, real, label, where, needs_room, names_file):
         def call(*args, **kw):
@@ -87,11 +88,19 @@ class Stop:
             # A folder that is already there needs no room, so mkdir can't fail on it.
             if here and self.how == 'full' and not (label == 'Path.mkdir' and Path(path).is_dir()):
                 raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), *([str(path)] if names_file else []))
+            # Windows won't delete or replace a file that is still memory-mapped; the same is pretended on
+            # every system, so that a mapping held too long (in a stopped call's traceback, say) shows anywhere.
+            held = self.mapped.get(str(path))
+            if label != 'np.memmap' and held is not None and held() is not None:
+                raise PermissionError(errno.EACCES, 'The process cannot access the file because it is being '
+                                      'used by another process', str(path))
             self.inside += 1
             try:
                 result = real(*args, **kw)
             finally:
                 self.inside -= 1
+            if label == 'np.memmap':
+                self.mapped[str(path)] = weakref.ref(result)
             if here and self.how == 'after':
                 raise KeyboardInterrupt
             return result

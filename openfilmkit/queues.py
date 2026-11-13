@@ -48,6 +48,7 @@ runs again. Only jobs packed on this machine are put back beside their originals
 folder named with --to.
 """
 import json
+import math
 import os
 import re
 import shlex
@@ -557,13 +558,14 @@ def worker_settings(**given):
     if not NAME.match(s['name']):
         raise QueueError(f'worker names use letters, digits, ".", "_" and "-": {s["name"]!r}')
     s['queue'] = _spec(s['queue'])
-    s['drop'] = _spec(s['drop']) if isinstance(s.get('drop'), str) else f"{s['queue'].rstrip('/')}/drop/{s['name']}"
+    # An empty drop counts as none given: taken as it stood, the worker's files were synced to "/".
+    s['drop'] = _spec(s['drop']) if s.get('drop') and isinstance(s['drop'], str) else f"{s['queue'].rstrip('/')}/drop/{s['name']}"
     s['state'] = Path(s.get('state') or _cache() / 'worker')
     for key, least in (('memory_gb', None), ('yield_mb', 0), ('lease', 0), ('renew', 0), ('settle', 0), ('poll', 0),
                        ('check', 0)):
         try:
             s[key] = float(s[key]) if key == 'memory_gb' or isinstance(s[key], str) else s[key] + 0
-            wrong = isinstance(s[key], bool) or (s[key] <= 0 if least is None else s[key] < least)
+            wrong = isinstance(s[key], bool) or not math.isfinite(s[key]) or (s[key] <= 0 if least is None else s[key] < least)
         except (TypeError, ValueError):
             wrong = True
         if wrong:

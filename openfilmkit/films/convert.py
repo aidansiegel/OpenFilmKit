@@ -10,12 +10,13 @@ kit's, and roll choices come from the roll folder's roll.json. Each conversion r
 hold (see health.py), so a clamped or stretched channel is reported, not silently converted.
 """
 from pathlib import Path
-import datetime,hashlib,json,math,os,struct
+import datetime,hashlib,json,math,os,struct,traceback
 import numpy as np
 import tifffile
 from PIL import Image,ImageCms
 from . import density as film_density, stocks as film_stocks
 from .. import health as scan_health, roll as rolls
+from ..pixels import tiff_page
 Image.MAX_IMAGE_PIXELS=None
 CHANNELS=('Red','Green','Blue')
 
@@ -29,12 +30,11 @@ def raw_open(path):
     infrared sample (VueScan RGBI) is dropped; thumbnails and SilverFast's separate infrared page are skipped."""
     try:
         with tifffile.TiffFile(path) as tif:
-            page=next((p for p in tif.pages if not p.subfiletype&5),None)  # 1: reduced-size copy, 4: mask/infrared
-            if page is None:raise ValueError('TIFF has no full-size image.')
+            page=tiff_page(tif)   # the full-size image, not a reduced copy or an infrared page; and all of it there
             spp,h,w=page.samplesperpixel,page.imagelength,page.imagewidth
             if page.photometric!=tifffile.PHOTOMETRIC.RGB or page.bitspersample!=16 or page.sampleformat!=1 or spp not in (3,4):
                 raise ValueError(f'Conversion needs a linear RGB scan at 16 bits per channel (48-bit, or 64-bit with infrared); '
-                                 f'this TIFF is {page.photometric.name} with {spp} x {page.bitspersample}-bit samples.')
+                                 f'this TIFF is {getattr(page.photometric,"name",page.photometric)} with {spp} x {page.bitspersample}-bit samples.')
             planar=page.planarconfig==tifffile.PLANARCONFIG.SEPARATE;shape=(spp,h,w) if planar else (h,w,spp)
             if page.compression==tifffile.COMPRESSION.NONE and page.is_contiguous:
                 offset=page.dataoffsets[0]
@@ -42,7 +42,9 @@ def raw_open(path):
                 a=np.memmap(path,dtype=tif.byteorder+'u2',mode='r',offset=offset,shape=shape)
             else:a=page.asarray().reshape(shape)
     except tifffile.TiffFileError as e:raise ValueError(f'Not a readable TIFF: {e}') from e
+    except (ValueError,OSError):raise
     except KeyError as e:raise ValueError(f'Unsupported TIFF compression: {e}') from e
+    except Exception as e:raise ValueError(f'Not a readable TIFF: {str(e) or type(e).__name__}') from e   # a damaged file: the decoders raise whatever comes of it
     return np.moveaxis(a[:3],0,-1) if planar else a[:,:,:3]
 
 OUTPUTS=('.jpg','.jpeg','.png','.tif','.tiff')
@@ -230,9 +232,12 @@ def convert(args,root=film_stocks.DATA):
             pixels.flush();icc=srgb_icc()
             if deep:write_tiff(made[dest],pixels,icc)
             else:
-                im=Image.fromarray(pixels);im.save(made[dest],icc_profile=icc,**({'quality':95,'subsampling':0} if dest.suffix.lower()!='.png' else {}));del im
+                im=Image.fromarray(pixels)
+                try:im.save(made[dest],icc_profile=icc,**({'quality':95,'subsampling':0} if dest.suffix.lower()!='.png' else {}))
+                finally:del im
         finally:
-            del pixels;scratch.unlink(missing_ok=True)
+            del pixels
+        scratch.unlink(missing_ok=True)
         np.save(made[lutfile],lut)
         record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,output_dimensions=[ww,hh],source_dimensions=[w,h],downscale=dict(method='block average',block=stride) if stride>1 else None,channel_health=health,output=str(dest),output_sha256=sha(made[dest]),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(made[lutfile]),raw_tiffs_modified=False,approved=False)
         if calibrated:record['density_calibration']=calibrated
@@ -242,6 +247,10 @@ def convert(args,root=film_stocks.DATA):
             if final.exists():raise ValueError('Refusing to overwrite '+str(final))
             placed.append(final);part.replace(final)   # noted first: stopped just after the rename, it is still this run's to take away
     except BaseException as e:
+        # What was stopped can still hold the scratch file mapped, or a file open, in the frames of its traceback:
+        # they are let go of first, since Windows deletes neither. (Deleted in a `finally` before, the scratch file
+        # raised its own error there, which took the place of the Ctrl-C, and was left behind to block the next run.)
+        traceback.clear_frames(e.__traceback__)
         for leftover in (*placed,*made.values(),scratch):
             try:leftover.unlink(missing_ok=True)
             except OSError:pass

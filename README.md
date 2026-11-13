@@ -40,7 +40,9 @@ openfilmkit clean roll-07               # dust and holder edges, on new copies
 ```
 
 Every command takes `--json`. Masters are never changed; every conversion and cleaned copy has a
-recipe beside it that says exactly how it was made.
+recipe beside it that says exactly how it was made. An error the kit didn't foresee is said in one
+line, with its traceback saved under `~/.cache/openfilmkit/errors` to send with a report
+(`OPENFILMKIT_TRACEBACK=1` shows it instead).
 
 - `scan --full-area` scans the driver's whole area instead of its default selection.
 - Ctrl-C during a scan tells the scanner program once and gives it half a minute to cancel and

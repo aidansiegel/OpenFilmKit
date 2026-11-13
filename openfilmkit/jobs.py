@@ -165,7 +165,7 @@ def megapixels(path):
         if Path(path).suffix.lower() in ('.tif', '.tiff'):
             import tifffile
             with tifffile.TiffFile(path) as tif:
-                h, w = tif.pages[0].shape[:2]
+                h, w = next((p for p in tif.pages if not p.subfiletype & 5), tif.pages[0]).shape[:2]   # as clean reads it
         else:
             from PIL import Image
             with Image.open(path) as im:

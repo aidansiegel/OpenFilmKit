@@ -4,11 +4,13 @@ Exit status: 0 ok, 1 error, 2 no scanner found, 3 scanner found but not
 safely identified, 130 interrupted.
 """
 import argparse
+import datetime
 import errno
 import json
 import os
 import shutil
 import sys
+import traceback
 from pathlib import Path
 
 from . import __version__, capture, identify, options as opts, roll, scanners
@@ -31,15 +33,45 @@ class Out:
         self.stream = sys.stderr if as_json else sys.stdout
 
     def say(self, text=''):
-        print(text, file=self.stream, flush=True)
+        self._print(text, self.stream)
 
     def error(self, text):
-        print(text, file=sys.stderr, flush=True)
+        self._print(text, sys.stderr)
+
+    @staticmethod
+    def _print(text, stream):
+        try:
+            print(text, file=stream, flush=True)
+        except UnicodeEncodeError:   # a Windows pipe or file in cp1252 has no "→": the line still gets said
+            encoding = getattr(stream, 'encoding', None) or 'ascii'
+            print(text.encode(encoding, 'replace').decode(encoding), file=stream, flush=True)
 
     def result(self, data):
         if self.as_json:
             json.dump(data, sys.stdout, indent=1, default=str)
             print()
+
+
+def _plain(e):
+    """An error in a line. One from the system says what went wrong and with which file, the name as
+    it is: Python's own text has it in quotes, with every backslash of a Windows path doubled."""
+    if isinstance(e, OSError) and e.strerror and e.filename is not None:
+        return f'{e.strerror}: {e.filename}'
+    return str(e)
+
+
+def _keep_traceback(argv):
+    """Save the traceback of the error being handled, to send with a report: its path, or None."""
+    try:
+        folder = Path(os.environ.get('OPENFILMKIT_CACHE') or Path.home() / '.cache' / 'openfilmkit') / 'errors'
+        folder.mkdir(parents=True, exist_ok=True)
+        for old in sorted(folder.glob('*.txt'))[:-19]:   # the last twenty are kept
+            old.unlink(missing_ok=True)
+        log = folder / f"{datetime.datetime.now().strftime('%Y%m%dT%H%M%S')}-{os.getpid()}.txt"
+        log.write_text(f"openfilmkit {__version__}: {' '.join(map(str, argv))}\n\n{traceback.format_exc()}")
+        return log
+    except Exception:
+        return None
 
 
 def detect(runtime):
@@ -307,9 +339,11 @@ def cmd_clean(args, out):
             ck = jobs.local_checkpoints(jobs.clean_job(source, args.output, **options)[0])
             record = clean.clean(source, args.output, say=out.error, checkpoints=ck, **options)
             shutil.rmtree(ck, ignore_errors=True)
-        except (clean.CleanError, jobs.JobError) as e:
-            out.error(f'openfilmkit: {source}: {e}')
-            records.append({'source': str(source), 'error': str(e)})
+        except (clean.CleanError, jobs.JobError, OSError) as e:   # this photo's trouble: on to the next
+            if isinstance(e, OSError) and _pipe_error(e):
+                raise
+            out.error(f'openfilmkit: {source}: {_plain(e)}')
+            records.append({'source': str(source), 'error': _plain(e)})
             continue
         summary = ', '.join(
             f"{s['step']} {s.get('pixels_filled', '')}".strip() if s['step'] == 'dust' else s['step']
@@ -335,8 +369,8 @@ def pack_clean(sources, args, options, out):
         try:
             package = jobs.pack_clean(source, into, output=args.output, **options)
         except (jobs.JobError, OSError) as e:
-            out.error(f'openfilmkit: {source}: {e}')
-            packed.append({'source': str(source), 'error': str(e)})
+            out.error(f'openfilmkit: {source}: {_plain(e)}')
+            packed.append({'source': str(source), 'error': _plain(e)})
             continue
         if args.pack:
             out.say(f'{source.name} → job {package.name[:12]} in {package.parent}')
@@ -416,6 +450,9 @@ def cmd_queue(args, out):
         q = queues.queue_settings(args.name)
         if args.queue_command == 'collect':
             records = queues.collect(q, args.to, say=out.say)
+            for r in records:   # said, not only put in the JSON: a collect that failed used to end without a word
+                if 'error' in r:
+                    out.error(f"openfilmkit: job {r['id'][:12]}: {r['error']}")
             if not records:
                 out.say('Nothing finished to collect.')
             out.result(records)
@@ -584,7 +621,7 @@ def cmd_scan(args, out):
                 record = capture.capture(runtime, dest, name, plan, prof, scanner, film, settings,
                                          estimate, extra, progress=sys.stderr)
             except capture.CaptureError as e:
-                out.say(f'\nCapture failed: {e}')
+                out.error(f'\nCapture failed: {e}')
                 records.append({'output': str(dest), 'status': 'failed_or_interrupted',
                                 'error': str(e)})
                 if interactive and roll_dir:
@@ -815,6 +852,7 @@ def _stdout_closed():
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
     args = parser().parse_args(argv)
     out = Out(getattr(args, 'json', False))
     try:
@@ -832,8 +870,19 @@ def main(argv=None):
         if isinstance(e, OSError) and _pipe_error(e) and _stdout_closed():
             # The reader went away (`openfilmkit scanners | head`): stop quietly, like a SIGPIPE.
             return 141
-        out.error(f'openfilmkit: {e}')
-        out.result({'error': str(e)})
+        out.error(f'openfilmkit: {_plain(e)}')
+        out.result({'error': _plain(e)})
+        return 1
+    except Exception as e:
+        # Nothing above foresaw it. Said in a line all the same, with the traceback kept for a report
+        # (or shown, with OPENFILMKIT_TRACEBACK set), and where it came from, so the line alone says something.
+        if os.environ.get('OPENFILMKIT_TRACEBACK'):
+            raise
+        at = traceback.extract_tb(e.__traceback__)[-1]
+        text = f'unexpected error: {type(e).__name__}: {e} ({Path(at.filename).name}, line {at.lineno})'
+        log = _keep_traceback(argv)
+        out.error(f'openfilmkit: {text}' + (f'; the details are in {log}' if log else ''))
+        out.result({'error': text, 'unexpected': True, 'details': str(log) if log else None})
         return 1
 
 

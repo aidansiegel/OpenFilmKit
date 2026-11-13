@@ -120,11 +120,18 @@ def load(path):
         import tifffile
         try:
             with tifffile.TiffFile(path) as tif:
-                page = tif.pages[0]
+                page = pixels.tiff_page(tif)   # the picture, not a thumbnail before it, and all there
+                kind = getattr(page.photometric, 'name', page.photometric)
+                # RGB as it is, or what a JPEG decoder turns into RGB. Anything else read as RGB gives a
+                # copy in wrong colors: of a CMYK file, its cyan, magenta and yellow as red, green and blue.
+                if kind != 'RGB' and not (kind == 'YCBCR' and page.compression in (6, 7)):
+                    raise CleanError(f'{kind} TIFF; clean works on RGB conversions')
                 img = page.asarray()
                 orientation, icc = pixels.tiff_tags(page)
-        except (OSError, ValueError, tifffile.TiffFileError) as e:
-            raise CleanError(f'cannot read image: {e}') from e
+        except CleanError:
+            raise
+        except Exception as e:   # a damaged file: tifffile and its decoders raise whatever comes of it
+            raise CleanError(f'cannot read image: {str(e) or type(e).__name__}') from e
         if img.ndim != 3 or img.shape[2] not in (3, 4) or img.dtype not in (np.uint8, np.uint16):
             raise CleanError(f'{img.dtype} image of shape {img.shape}; clean works on RGB conversions')
         if img.dtype == np.uint16 and not icc:

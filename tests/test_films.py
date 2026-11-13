@@ -201,6 +201,14 @@ class OtherScanSoftware(unittest.TestCase):
    # SilverFast marks its infrared page as a mask (NewSubfileType 4), which tifffile won't write by name.
    if infrared_page:w.write(self.ir,photometric='minisblack',extratags=[(254,'I',1,4,True)])
   return path
+ def test_a_scan_that_isnt_all_there_is_refused(self):
+  """tifffile fills what a file lacks with zeros: a scan cut short converted as one that was partly black."""
+  def scan(name,change,**kw):
+   path=self.root/name;tifffile.imwrite(path,self.rgb,photometric='rgb',**kw)
+   with tifffile.TiffFile(path,mode='r+') as tif:tif.pages[0].tags[change[0]].overwrite(change[1])
+   return path
+  for path,why in ((scan('taller.tif',('ImageLength',2400),compression='zlib',rowsperstrip=5),'damaged'),(scan('empty.tif',('StripByteCounts',0),compression='zlib',rowsperstrip=20),'truncated'),(scan('not-deflate.tif',('Compression',8),rowsperstrip=20),'Not a readable TIFF'),(scan('odd.tif',('PhotometricInterpretation',9999)),'needs a linear RGB scan')):
+   with self.assertRaisesRegex(ValueError,why,msg=path.name):conversion.raw_open(path)
  def test_layouts_and_compressions_read_identically(self):
   cases={'lzw':dict(data=self.rgb,compression='lzw'),'lzw-predictor':dict(data=self.rgb,compression='lzw',predictor=True),
    'zip':dict(data=self.rgb,compression='zlib'),'packbits':dict(data=self.rgb,compression='packbits'),

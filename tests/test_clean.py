@@ -1,4 +1,5 @@
 import contextlib
+import functools
 import io
 import json
 import sys
@@ -156,6 +157,23 @@ class Clean(unittest.TestCase):
         self.assertIn(str(src.parent.resolve()), str(said.exception))        # where there is no space
         self.assertEqual([p.name for p in self.root.iterdir()], ['frame-v1.jpg'])
         self.assertEqual(Path(clean.clean(src, protect_faces=False)['output']).name, 'frame-v1-clean-v1.jpg')
+
+    def test_one_photo_that_cant_be_read_doesnt_stop_the_rest(self):
+        a, b = self.write(scene(), 'a-v1.jpg'), self.write(scene(), 'b-v1.jpg')
+        real = clean.clean
+
+        @functools.wraps(real)   # its options are read from its signature when the work is described
+        def first_fails(source, *args, **kw):
+            if Path(source).name == 'a-v1.jpg':
+                raise PermissionError(13, 'Permission denied', str(source))
+            return real(source, *args, **kw)
+        out = io.StringIO()
+        with mock.patch.object(clean, 'clean', first_fails), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(io.StringIO()):
+            code = cli.main(['clean', str(a), str(b), '--json', '--no-faces'])
+        recs = json.loads(out.getvalue())
+        self.assertEqual((code, ['error' in r for r in recs]), (1, [True, False]))
+        self.assertTrue(recs[0]['error'].startswith('Permission denied: ') and recs[0]['error'].endswith('a-v1.jpg'))
 
     def test_dust_can_be_left_for_later(self):
         r = self.root / 'roll-02'
@@ -446,6 +464,38 @@ class Deep(unittest.TestCase):
         self.assertGreater(len(np.unique(out[..., 0])), 2000)     # still 16-bit detail, not 8-bit steps
         self.assertEqual([s['step'] for s in rec['steps']], ['to_srgb', 'upright'])
         self.assertEqual(rec['bits_per_channel'], {'source': 16, 'output': 16})
+
+    def test_a_tiff_that_isnt_all_there_or_isnt_rgb_is_refused(self):
+        """tifffile fills what a file lacks with zeros, and clean took a TIFF's first page as it came. A
+        file cut short came back as a "cleaned" copy that was partly black; a thumbnail was cleaned in
+        place of the photo behind it; a CMYK file's cyan, magenta and yellow were taken for red, green
+        and blue."""
+        import tifffile
+        img = scene(w=300, h=200)
+
+        def tiff(name, data=img, change=None, **kw):
+            path = self.root / name
+            tifffile.imwrite(path, data, **{'photometric': 'rgb', **kw})
+            if change:
+                with tifffile.TiffFile(path, mode='r+') as tif:
+                    tif.pages[0].tags[change[0]].overwrite(change[1])
+            return path
+        half = tiff('half.tif', compression='zlib')
+        half.write_bytes(half.read_bytes()[:half.stat().st_size // 2])
+        refused = [(half, 'cannot read'),
+                   (tiff('taller.tif', compression='zlib', rowsperstrip=20, change=('ImageLength', 2400)), 'damaged'),
+                   (tiff('empty.tif', compression='zlib', rowsperstrip=200, change=('StripByteCounts', 0)), 'truncated'),
+                   (tiff('not-deflate.tif', rowsperstrip=200, change=('Compression', 8)), 'cannot read'),
+                   (tiff('cmyk.tif', np.zeros((200, 300, 4), np.uint8), photometric='separated'), 'SEPARATED')]
+        for path, why in refused:
+            with self.assertRaisesRegex(clean.CleanError, why, msg=path.name):
+                clean.clean(path, dust=False, crop=False, protect_faces=False)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), sorted(p.name for p, _ in refused))
+        with tifffile.TiffWriter(self.root / 'thumb-first.tif') as out:      # as some programs write them
+            out.write(np.zeros((20, 30, 3), np.uint8), photometric='rgb', subfiletype=1)
+            out.write(img, photometric='rgb')
+        rec = clean.clean(self.root / 'thumb-first.tif', dust=False, crop=False, protect_faces=False)
+        self.assertEqual(rec['source_dimensions'], [300, 200])
 
     def test_a_16_bit_tiff_can_also_give_a_jpeg(self):
         rec = clean.clean(self.write(scene16()), self.root / 'web.jpg', protect_faces=False)
