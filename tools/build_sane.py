@@ -179,9 +179,10 @@ def write_udev_rules(prefix, table):
     return out
 
 
-def build(work, prefix, jobs, models_out, source=None):
+def build(work, prefix, jobs, models_out, source=None, patches=True):
     """Build into `prefix`. With `source`, use that SANE tree (already the pinned commit, as
-    verified by the caller, e.g. Homebrew's git revision check) instead of fetching one."""
+    verified by the caller, e.g. Homebrew's git revision check) instead of fetching one.
+    With patches=False, patches/ is skipped: a runtime for A/B comparisons, never the default."""
     pin = json.loads(PIN.read_text())
     work, prefix = Path(work).expanduser().resolve(), Path(prefix).expanduser().resolve()
     build_space = Path(source).resolve() if source else work
@@ -211,8 +212,12 @@ def build(work, prefix, jobs, models_out, source=None):
         print(f'fetching {short}')
         fetch(pin, src, log)
         origin = 'fetched by build_sane.py; git verified the commit hash'
-    print('applying patches')
-    applied = apply_patches(src, log)
+    if patches:
+        print('applying patches')
+        applied = apply_patches(src, log)
+    else:
+        print('not applying patches: an unpatched runtime, for comparisons only')
+        applied = []
     # git-version-gen prefers this file; a shallow clone has no tags to describe.
     (src / '.tarball-version').write_text(pin['version_label'] + '\n')
     remove_appledouble(src)
@@ -277,9 +282,13 @@ def main():
     parser.add_argument('--prefix', required=True, help='install location (~10 MB, not exFAT)')
     parser.add_argument('--jobs', type=int, default=os.cpu_count() or 2)
     parser.add_argument('--models-out', default=str(MODELS_OUT))
+    parser.add_argument('--no-patches', action='store_true',
+                        help="skip patches/: an unpatched runtime for A/B comparisons; install it "
+                             "outside the kit's runtime folder so it's never chosen by default")
     args = parser.parse_args()
     try:
-        build(args.work, args.prefix, args.jobs, args.models_out, args.source)
+        build(args.work, args.prefix, args.jobs, args.models_out, args.source,
+              patches=not args.no_patches)
     except (BuildError, extract_models.TableError) as e:
         sys.exit(f'build_sane: {e}')
 
