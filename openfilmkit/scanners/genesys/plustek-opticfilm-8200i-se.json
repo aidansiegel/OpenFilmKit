@@ -14,7 +14,12 @@
  "requires_patches": ["0001-gl128-afe-port-replay.diff"],
  "hardware_record": [
   {"date": "2026-11-04", "driver": "SANE 6b5186ad, unpatched (film-scan)",
-   "result": "66 frames at 7200 dpi, 48-bit linear TIFF; blue offset bug found in these scans"}
+   "result": "66 frames at 7200 dpi, 48-bit linear TIFF; blue offset bug found in these scans"},
+  {"date": "2026-11-18", "driver": "SANE 8ebb7c50 with 0001-gl128-afe-port-replay (OpenFilmKit main 18f2ed4)",
+   "usb": "bcdDevice 0702, serial string 1",
+   "result": "A roll of 35 mm color negatives captured and verified. 7200 dpi: 91 s per frame, 10369 x 7034 px, 437.6 MB. 3600 dpi: about 51 s, 5184 x 3519 px. 900 dpi: 21 s. Same-frame A/B, holder untouched: unpatched, blue is exactly 0 on 5.4% of the frame and on all of the opaque holder; patched, none. 3600 and 7200 dpi resolve the same detail on consumer negatives; 7200 adds only finer grain."},
+  {"date": "2026-11-18", "driver": "SANE 8ebb7c50 with 0001-gl128-afe-port-replay",
+   "result": "Frames are about 0.18 mm short of the 25 mm area at every resolution (7034 of 7086 rows at 7200 dpi), the same unpatched; likely the color line-distance compensation. Green skips 10-62% of its codes, rising over the first 40 minutes, then steady; red and blue use every code. No IT8 target with the scanner."}
  ],
  "notes": [
   "SANE status: basic. Infrared is not implemented for GL128.",

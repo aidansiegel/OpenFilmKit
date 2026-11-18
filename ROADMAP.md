@@ -20,9 +20,9 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 |---|---|---|
 | M0 | Name, license, repository | Done: OpenFilmKit, GPL-3.0-or-later. |
 | M1 | Build SANE from a pinned commit plus `patches/` | Done: `tools/build_sane.py`, `packaging/sane-pin.json`. |
-| M2 | Capture: `doctor`, `scanners`, `options`, `roll new`, `scan` | Done on SANE's test backend; first hardware run pending. |
+| M2 | Capture: `doctor`, `scanners`, `options`, `roll new`, `scan` | Done: tested on an OpticFilm 8200i SE on November 18, 2026 (a roll of negatives at 3600 dpi, plus a same-frame A/B that confirmed the blue-offset patch). |
 | M3 | Film profiles and conversion | Done: 142 data-sheet profiles; `stocks`, `profiles`, `roll set`, `convert`. |
-| M4 | Scanner color profiling (IT8 target, ArgyllCMS) | Not started; needs an IT8 transparency target to finish. |
+| M4 | Scanner color profiling (IT8 target, ArgyllCMS) | Not started; needs an IT8 transparency target to finish. The library's 8200i SE didn't come with one. |
 | M5 | Cleanup: dust, fibers, holder edges, red eye, scratches | Done: `clean`, and `clean --scratches` (trained models, opt-in). |
 | M6 | Packaging: Homebrew tap for macOS and Linux | Done: `brew install` tested on macOS (arm64) and Fedora (aarch64). |
 | M7 | Terminal UI (Textual) | In progress: `openfilmkit ui` browses rolls with previews (before/after, fixes marked), recipes, cleaning (here, on a host, into a queue) and the queue. Next: a scan screen, after the first real scanner runs. |
@@ -32,7 +32,15 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 
 ## Known limits
 
-- The OpticFilm 8200i SE (GL128) has "basic" status in SANE; infrared isn't implemented.
+- The OpticFilm 8200i SE (GL128) has "basic" status in SANE; infrared isn't implemented. Its
+  frames come out about 0.18 mm short of the 25 mm the driver offers (7,034 rows at 7200 dpi), at
+  every resolution. Its green channel skips 10-60% of its codes, changing from scan to scan
+  though every scan at one resolution reused the same calibration; it rose over the first 40
+  minutes of a session, then held, cause not known. About 1.4 of 16 bits at worst; red and blue
+  use every code.
+- genesys never expires a cached calibration for film (only flatbed entries expire), and keeps
+  one per resolution in `~/.sane/<model>.cal`: a scan can reuse a calibration made weeks earlier
+  by another driver build.
 - Scanning on Windows isn't supported (no SANE); `convert` and `clean` run there on raw scans from
   SilverFast or VueScan.
 - Two identical scanners connected at once can't be told apart (no per-unit ID).

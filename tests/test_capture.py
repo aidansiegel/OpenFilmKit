@@ -99,7 +99,8 @@ class Plan(unittest.TestCase):
             scanners.plan(no_geometry, SE_PROFILE, whole_area=True)
 
     def test_full_frame_estimate(self):
-        # 10369 x 7086 px x 6 bytes, the ~440 MB film-scan documents.
+        # The full 25 mm area: 10369 x 7086 px x 6 bytes. Real frames are 7034 rows (437.6 MB), so the
+        # estimate leaves a little room.
         self.assertEqual(scanners.estimate_bytes(SE, SE_PROFILE, 7200), 10369 * 7086 * 6)
 
 

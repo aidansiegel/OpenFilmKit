@@ -10,8 +10,9 @@
 Free film scanning and negative conversion from the command line, for macOS and Linux, built on
 [SANE](http://www.sane-project.org/).
 
-**Status: early development.** Capture, conversion and cleanup work; the first scanner it targets
-is the Plustek OpticFilm 8200i SE. Expect changes.
+**Status: early development.** Conversion and cleanup work. Capture has been tested on one
+scanner, the Plustek OpticFilm 8200i SE (a library's, on November 18, 2026: about 50 s per frame
+at 3600 dpi, 90 s at 7200), and needs the patched SANE the kit builds. Expect changes.
 
 ## Install
 
