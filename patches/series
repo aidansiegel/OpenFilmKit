@@ -1,3 +1,4 @@
 # Applied in order on top of the pinned SANE commit (packaging/sane-pin.json).
 # Remove a line and its file once upstream has the change.
 0001-gl128-afe-port-replay.diff
+0002-gl128-afe-search.diff
