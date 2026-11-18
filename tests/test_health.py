@@ -53,11 +53,30 @@ class Health(unittest.TestCase):
 
     def test_a_digitally_stretched_channel_is_reported(self):
         a = negative()
-        a[..., 1] = np.clip(a[..., 1].astype(int) // 3 * 3, 0, 65535)    # two codes in three never occur
+        a[..., 1] = np.clip(a[..., 1].astype(int) // 5 * 5, 0, 65535)    # four codes in five never occur
         report = health.check(a)
         (warning,) = report['warnings']
         self.assertIn('green never uses', warning)
-        self.assertAlmostEqual(report['channels']['green']['missing_codes'], 2 / 3, delta=0.05)
+        self.assertIn('digital gain', warning)
+        self.assertAlmostEqual(report['channels']['green']['missing_codes'], 4 / 5, delta=0.05)
+        self.assertGreaterEqual(report['channels']['green']['missing_bits'], 2.0)
+
+    def test_gaps_that_cost_little_are_a_note(self):
+        # Like the OpticFilm 8200i SE's green after its calibration: up to about half the codes unused.
+        a = negative()
+        g = a[..., 1].astype(int)
+        a[..., 1] = g + 11 * (g // 122)                                   # 122 codes out, then 11 skipped
+        report = health.check(a)
+        self.assertEqual(report['warnings'], [])
+        (note,) = report['notes']
+        self.assertIn('green never uses', note)
+        self.assertLess(report['channels']['green']['missing_bits'], 0.2)
+        self.assertIn('green never uses', '\n'.join(health.describe(report)))
+
+    def test_every_pixel_counts_not_a_sample(self):
+        # A large flat-ish scan where a sample would leave codes empty that the full scan uses.
+        a = np.concatenate([negative(800, 1200, seed=s) for s in (1, 2, 3)], axis=0)
+        self.assertEqual(health.check(a)['warnings'], [])
 
     def test_capture_records_it_and_check_reports_it(self):
         with tempfile.TemporaryDirectory() as d:
