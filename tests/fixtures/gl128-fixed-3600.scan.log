@@ -1,0 +1,12 @@
+[20:00:50.198606] [genesys] GL128 AFE search: off (OPENFILMKIT_GL128_FIXED_AFE), fixed codes
+[20:00:50.784316] [genesys] GL128 AFE codes: gains white (39,32,39) image (41,35,42), offsets white (56,69,61) dark (50,62,55)
+[20:00:51.958937] [genesys] GL128 shading dark even=(2237,2260,2574) odd=(2237,2261,2574)
+[20:00:52.077654] [genesys] GL128 relight 0: peak=64502
+[20:00:52.682489] [genesys] GL128 relight 1: peak=64532
+[20:00:53.511727] [genesys] GL128 shading white0=(59190,63275,62961) gain0=(9070,8485,8527)
+[20:00:53.511780] [genesys] GL128 shading white ch0 min=58158 mean=63029 max=63298 at_adc_ceiling=4382/5184
+[20:00:53.511803] [genesys] GL128 shading white ch1 min=63274 mean=63274 max=63275 at_adc_ceiling=5184/5184
+[20:00:53.511826] [genesys] GL128 shading white ch2 min=62961 mean=62961 max=62961 at_adc_ceiling=5184/5184
+[20:00:53.546231] [genesys] GL128: positioning feed pair 28292 then 13128 steps
+[20:00:56.023705] [genesys] GL128: positioned (at_home=0 motor=0)
+[20:00:56.023739] [genesys] GL128: image 3600x3600 dpi, 3543 lines, unstagger 0 buffer rows

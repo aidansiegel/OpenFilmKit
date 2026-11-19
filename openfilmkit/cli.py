@@ -640,9 +640,10 @@ def cmd_scan(args, out):
             out.say(f"\nSaved and verified: {dest}\nSHA-256: {record['sha256']}")
             if record['channel_health'].get('error'):
                 out.say(f"! What its channels hold was not checked: {record['channel_health']['error']}")
-            for w in record['channel_health']['warnings']:
+            for w in record['channel_health']['warnings'] + capture.frontend_problems(record.get('frontend')):
                 out.say(f'! {w}')
-            records.append({k: record[k] for k in ('output', 'status', 'sha256', 'bytes', 'tiff', 'channel_health')})
+            records.append({k: record[k] for k in ('output', 'status', 'sha256', 'bytes', 'tiff', 'channel_health',
+                                                   'frontend') if k in record})
             frame += 1
     finally:
         for s, handler in before.items():

@@ -13,6 +13,10 @@ scanimage once and waits: on its first signal scanimage cancels the scan and let
 park; on a second it exits at once, in the middle of that. (It used to get both, the terminal's
 and then ours.) A scan that goes silent, with no word and no growth of the file, is given up on
 after STALL seconds, and a display nobody reads any more doesn't stop one.
+
+With the genesys backend scanimage runs at SANE_DEBUG_GENESYS=4 (unless that is set already), so
+the log has the front-end codes and white levels the kit's GL128 patch chose; frontend() reads them
+into the record. The terminal gets only what scanimage itself says, not the driver's debug lines.
 """
 import codecs
 import datetime
@@ -85,6 +89,121 @@ def command(runtime, device, plan, extra=()):
     return args
 
 
+# A SANE debug line: "[19:59:59.560828] [genesys] ...", or without the time in older builds.
+DEBUG_LINE = re.compile(r'(?:\[\d\d:\d\d:\d\d\.\d+\] )?\[[\w.-]+\] ')
+TRIPLE = r'\((-?\d+),(-?\d+),(-?\d+)\)'
+CHANNELS = ('red', 'green', 'blue')
+SEARCH_WARNINGS = ('barely moved', 'too dark', 'still moving')
+CLIPPED = 0.01   # share of the white strip's columns at the ADC ceiling above which a channel counts as clipped
+
+
+def scan_env(runtime, device):
+    """The environment scanimage runs in: the runtime's, and for genesys the driver's debug level 4,
+    at which the GL128 patch logs the front-end codes and white levels. A level already set stays."""
+    env = runtime.env()
+    if str(device).partition(':')[0] == 'genesys':
+        env.setdefault('SANE_DEBUG_GENESYS', '4')
+    return env
+
+
+class _Display:
+    """Of what scanimage says, the part for the terminal: all but the driver's debug lines (and the
+    indented blocks some of them open with "{" and close with "}"), which only the log keeps.
+    Given text in pieces of any size; a line is passed on once it ends, at a newline or carriage return."""
+    def __init__(self):
+        self.rest, self.block = '', False
+
+    def feed(self, text, end=False):
+        pieces = re.split(r'(?<=[\r\n])', self.rest + text)
+        self.rest = '' if end else pieces.pop()
+        shown = []
+        for piece in pieces:
+            if self.block:
+                self.block = not piece.startswith('}')
+            elif DEBUG_LINE.match(piece):
+                self.block = piece.rstrip().endswith('{')
+            else:
+                shown.append(piece)
+        return ''.join(shown)
+
+
+def _triple(m, at=1):
+    return [int(m[at]), int(m[at + 1]), int(m[at + 2])]
+
+
+def frontend(log):
+    """What the GL128 patch logged of the front end (the analog gains and offsets) and the white and
+    dark references, from the text of a scan log; {} if it logged nothing. Only what was logged is
+    there; where a line comes more than once, the last counts."""
+    fe, white, warmups = {}, {}, 0
+    for line in log.splitlines():
+        at = line.find('GL128 ')
+        if at < 0:
+            continue
+        line = line[at:].strip()
+        if line.startswith(('GL128 AFE search: off', 'GL128 AFE search: failed')):
+            fe['search'] = False   # fixed codes, asked for or fallen back to; a search line before doesn't undo it
+        elif line.startswith('GL128 AFE search:'):
+            fe.setdefault('search', True)
+        if any(w in line for w in SEARCH_WARNINGS) or line.startswith('GL128 AFE search: failed'):
+            fe.setdefault('warnings', []).append(line)
+        if m := re.match(r'GL128 AFE warm-up read (\d+):', line):
+            warmups = max(warmups, int(m[1]))
+        elif m := re.search(r'wide strip at gain 0 ' + TRIPLE + r' after (\d+) read', line):
+            fe['wide_strip_gain0'], fe['warmup_reads'] = _triple(m), int(m[4])
+        elif m := re.match(rf'GL128 AFE codes: gains white {TRIPLE} image {TRIPLE}, offsets white {TRIPLE} '
+                           rf'dark {TRIPLE}', line):
+            fe['gains'] = {'white': _triple(m), 'image': _triple(m, 4)}
+            fe['offsets'] = {'white': _triple(m, 7), 'dark': _triple(m, 10)}
+        elif m := re.match(r'GL128 shading white ch(\d) min=(\d+) mean=(\d+) max=(\d+) '
+                           r'at_adc_ceiling=(\d+)/(\d+)', line):
+            white[int(m[1])] = {'min': int(m[2]), 'mean': int(m[3]), 'max': int(m[4]),
+                                'at_adc_ceiling': int(m[5]), 'columns': int(m[6])}
+        elif m := re.match(rf'GL128 shading dark even={TRIPLE} odd={TRIPLE}', line):
+            fe['dark'] = {'even': _triple(m), 'odd': _triple(m, 4)}
+        elif line.startswith('GL128 image gain:'):
+            fe['image_gain'] = {name: [int(v) for v in values.split(',')]
+                                for name, values in re.findall(r'(\w+) \((-?\d+(?:,-?\d+)*)\)', line)}
+    if warmups and 'warmup_reads' not in fe:
+        fe['warmup_reads'] = warmups
+    if white:
+        fe['white'] = [white.get(c) for c in range(max(white) + 1)]
+    return fe
+
+
+def _names(channels):
+    return channels[0] if len(channels) == 1 else f"{', '.join(channels[:-1])} and {channels[-1]}"
+
+
+def frontend_problems(fe):
+    """What looks wrong in a record's front end, in a short line each: a white reference at the ADC
+    ceiling (the gains are too high, and the shading can't correct what it can't see), or a
+    warning from the front-end search."""
+    if not fe:
+        return []
+    said = []
+    clipped = [CHANNELS[c] if c < 3 else f'channel {c}' for c, w in enumerate(fe.get('white') or [])
+               if w and w['columns'] and w['at_adc_ceiling'] > CLIPPED * w['columns']]
+    if clipped:
+        said.append(f'White reference clipped in {_names(clipped)}: the front end is set too hot.')
+    for w in fe.get('warnings', []):
+        m = re.search(r'\bch(\d)\b', w)
+        ch = CHANNELS[int(m[1])] if m and int(m[1]) < 3 else 'a channel'
+        if 'barely moved' in w:
+            line = f"The front-end search couldn't set {ch}'s black offset and used a fixed one."
+        elif 'too dark' in w and m:
+            line = f'The front-end search found the lamp-on strip too dark in {ch}: is the lamp lit?'
+        elif 'too dark' in w:
+            line = 'The front-end search found the white strip too dark (is the lamp lit?) and kept the fixed codes.'
+        elif 'failed' in w:
+            line = 'The front-end search failed and kept the fixed codes.'
+        else:
+            line = 'The lamp was still warming up when the front-end gains were set.'
+        if line not in said:
+            said.append(line)
+    return said
+
+
 def inspect_tiff(path):
     # -D decodes every strip, so this checks more than the header.
     try:
@@ -146,6 +265,15 @@ def _write_record(path, record):
     os.replace(tmp, path)
 
 
+def _logged_frontend(path):
+    """{'frontend': ...} from the scan log at `path`, or {} when it has none or can't be read."""
+    try:
+        fe = frontend(path.read_text(encoding='utf-8', errors='replace'))
+    except OSError:
+        return {}
+    return {'frontend': fe} if fe else {}
+
+
 def _listen(stream, heard):
     """Pass on what scanimage says, as it says it, to the queue `heard`; None when it has finished.
     In a thread of its own, so that neither a silent scanner nor a display that has stopped
@@ -203,10 +331,10 @@ def capture(runtime, out, device, plan, prof, scanner, film, options_text, estim
         # The log in UTF-8 whatever the system's own encoding: what scanimage says is decoded with
         # U+FFFD for bytes that aren't text, and that has no place in cp1252, say.
         with p['partial'].open('xb') as image, p['log'].open('x', buffering=1, encoding='utf-8') as log:
-            process = subprocess.Popen(cmd, env=runtime.env(), stdout=image, stderr=subprocess.PIPE,
+            process = subprocess.Popen(cmd, env=scan_env(runtime, device), stdout=image, stderr=subprocess.PIPE,
                                        start_new_session=os.name == 'posix')
             threading.Thread(target=_listen, args=(process.stderr, heard), daemon=True).start()
-            shown, size, since = True, 0, time.monotonic()
+            shown, size, since, display = True, 0, time.monotonic(), _Display()
             while True:
                 try:
                     said = heard.get(timeout=LISTEN)
@@ -218,16 +346,18 @@ def capture(runtime, out, device, plan, prof, scanner, film, options_text, estim
                         raise CaptureError(f'scanimage has said nothing and written nothing for {STALL // 60} minutes: '
                                            f"the scanner or its connection is stuck; see {p['log']}")
                     continue
-                if said is None:
-                    break
-                since = time.monotonic()
-                log.write(said)
-                if shown:
+                if said is not None:
+                    since = time.monotonic()
+                    log.write(said)
+                text = display.feed(said or '', end=said is None)
+                if shown and text:
                     try:
-                        progress.write(said)
+                        progress.write(text)
                         progress.flush()
                     except (OSError, ValueError):   # nobody is reading any more: the scan goes on, and the log has it all
                         shown = False
+                if said is None:
+                    break
             code = process.wait()
             image.flush()
             os.fsync(image.fileno())
@@ -236,12 +366,13 @@ def capture(runtime, out, device, plan, prof, scanner, film, options_text, estim
         info = inspect_tiff(p['partial'])
         check_tiff(info, plan, prof)
         health = channel_health(p['partial'])
+        front = _logged_frontend(p['log'])
         with p['partial'].open('rb') as f:
             digest = hashlib.file_digest(f, 'sha256').hexdigest()
         # All that the record will say is known before the file takes its name, so that whatever
         # stops this between the two, the record written then is still the true one.
         verified = dict(record, channel_health=health, status='captured_verified', completed_utc=now(), sha256=digest,
-                        bytes=p['partial'].stat().st_size, tiff=info)
+                        bytes=p['partial'].stat().st_size, tiff=info, **front)
         try:
             files.place(p['partial'], p['out'])   # never over a file that took the name meanwhile
         except FileExistsError:
@@ -266,7 +397,7 @@ def capture(runtime, out, device, plan, prof, scanner, film, options_text, estim
                 pass
         else:
             record.update(status='failed_or_interrupted', ended_utc=now(), error=str(exc) or
-                          type(exc).__name__, partial=str(p['partial']))
+                          type(exc).__name__, partial=str(p['partial']), **_logged_frontend(p['log']))
         try:
             _write_record(p['record'], record)
         except OSError:   # the drive has gone too, say: the first trouble is the one to report

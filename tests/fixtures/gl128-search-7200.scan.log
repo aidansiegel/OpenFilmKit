@@ -1,0 +1,15 @@
+[20:19:48.937585] [genesys] GL128 AFE search: black at 0x80 (2809,2651,2860), at 0xff (5312,5140,5388) -> pre-offsets (-12,-5,-13)
+[20:19:49.464395] [genesys] GL128 AFE warm-up read 2: (31986,46099,36460) settled
+[20:19:49.464420] [genesys] GL128 AFE search: wide strip at gain 0 (31986,46099,36460) after 2 read(s), targets (50518,55518,56428) -> gains (27,12,26)
+[20:19:49.699110] [genesys] GL128 AFE search: black at 0x80 (4327,3161,4310), at 0xff (8248,6164,8159) -> offsets (29,48,28)
+[20:19:49.699132] [genesys] GL128 AFE codes: gains white (27,12,26) image (27,12,26), offsets white (29,48,28) dark (23,41,22)
+[20:19:50.873049] [genesys] GL128 shading dark even=(856,1029,973) odd=(869,1029,931)
+[20:19:50.986827] [genesys] GL128 relight 0: peak=49307
+[20:19:51.599763] [genesys] GL128 relight 1: peak=49308
+[20:19:52.448561] [genesys] GL128 shading white0=(44421,49146,48933) gain0=(12086,10924,10971)
+[20:19:52.448615] [genesys] GL128 shading white ch0 min=43806 mean=50493 max=52972 at_adc_ceiling=0/10372
+[20:19:52.448656] [genesys] GL128 shading white ch1 min=48066 mean=55421 max=57777 at_adc_ceiling=0/10372
+[20:19:52.448692] [genesys] GL128 shading white ch2 min=48391 mean=56215 max=58861 at_adc_ceiling=0/10372
+[20:19:52.496512] [genesys] GL128: positioning feed pair 28292 then 13128 steps
+[20:19:55.019314] [genesys] GL128: positioned (at_home=0 motor=0)
+[20:19:55.019363] [genesys] GL128: image 7200x7200 dpi, 7086 lines, unstagger 8 buffer rows
