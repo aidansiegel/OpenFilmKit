@@ -1,5 +1,5 @@
 diff --git a/backend/genesys/gl128.cpp b/backend/genesys/gl128.cpp
-index 8b6a1cb..33f8f39 100644
+index 8b6a1cb..29def5d 100644
 --- a/backend/genesys/gl128.cpp
 +++ b/backend/genesys/gl128.cpp
 @@ -36,6 +36,8 @@
@@ -11,7 +11,7 @@ index 8b6a1cb..33f8f39 100644
  #include <cmath>
  #include <functional>
  #include <iterator>
-@@ -845,6 +847,86 @@ void gl128_wait_feed_done(Genesys_Device* dev, unsigned steps, double timeout_s)
+@@ -845,6 +847,98 @@ void gl128_wait_feed_done(Genesys_Device* dev, unsigned steps, double timeout_s)
                          steps, timeout_s, motion_seen ? "yes" : "no");
  }
  
@@ -58,6 +58,18 @@ index 8b6a1cb..33f8f39 100644
 +    return std::max(0, std::min(0x3f, code));
 +}
 +
++bool gl128_strip_settled(const std::array<double, 3>& previous, const std::array<double, 3>& current,
++                         double tolerance)
++{
++    for (int c = 0; c < 3; c++) {
++        double base = std::max(1.0, previous[c]);
++        if (!(std::abs(current[c] - previous[c]) <= tolerance * base)) {
++            return false;
++        }
++    }
++    return true;
++}
++
 +std::array<double, 3> gl128_chunky_means(const std::vector<std::uint8_t>& strip, unsigned pixels)
 +{
 +    const std::size_t expected = static_cast<std::size_t>(pixels) * 6;
@@ -98,7 +110,7 @@ index 8b6a1cb..33f8f39 100644
  // --- ASIC (hardware) shading -------------------------------------------------
  // The ASIC applies an uploaded dark/gain table to the image when 0x01 has
  // DVDSET, as SilverFast does; genesys' host-side correction is disabled for
-@@ -1134,29 +1216,132 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+@@ -1134,29 +1228,156 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
      // registers set them back to 0.
      dev->interface->write_register(0xA7, 0x01);
      dev->interface->write_register(0xA9, 0x01);
@@ -175,15 +187,39 @@ index 8b6a1cb..33f8f39 100644
 +            "-> pre-offsets (%d,%d,%d)\n", lo[0], lo[1], lo[2], hi[0], hi[1], hi[2],
 +            pre[0], pre[1], pre[2]);
 +
-+        // Gains from the lamp-on wide strip at gain 0.
++        // Gains from the lamp-on wide strip at gain 0. Warm-up guard (as the plustek8200i driver
++        // does with its white strip): read it again, 300 ms apart, until no channel moves by more
++        // than 0.2%, at most OPENFILMKIT_GL128_WARMUP_READS reads (default 8; 1 = a single read).
 +        apply_fe(zero, codes(pre[0], pre[1], pre[2]));
++        int max_reads = 8;
++        if (const char* we = std::getenv("OPENFILMKIT_GL128_WARMUP_READS")) {
++            int n = std::atoi(we);
++            if (n >= 1 && n <= 60) {
++                max_reads = n;
++            }
++        }
 +        auto wide = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, true), wide_px);
++        int reads = 1;
++        bool settled = max_reads == 1;
++        while (!settled && reads < max_reads) {
++            std::this_thread::sleep_for(std::chrono::milliseconds(300));
++            auto next = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, true), wide_px);
++            reads++;
++            settled = gl128_strip_settled(wide, next, 0.002);
++            DBG(DBG_info, "GL128 AFE warm-up read %d: (%.0f,%.0f,%.0f)%s\n", reads,
++                next[0], next[1], next[2], settled ? " settled" : "");
++            wide = next;
++        }
++        if (!settled) {
++            DBG(DBG_warn, "GL128 AFE warm-up: wide strip still moving after %d reads; using the "
++                "last\n", reads);
++        }
 +        std::array<int, 3> gains;
 +        for (int c = 0; c < 3; c++) {
 +            gains[c] = gl128_gain_for_wide_mean(wide[c], targets[c]);
 +        }
-+        DBG(DBG_info, "GL128 AFE search: wide strip at gain 0 (%.0f,%.0f,%.0f), targets "
-+            "(%.0f,%.0f,%.0f) -> gains (%d,%d,%d)\n", wide[0], wide[1], wide[2],
++        DBG(DBG_info, "GL128 AFE search: wide strip at gain 0 (%.0f,%.0f,%.0f) after %d read(s), "
++            "targets (%.0f,%.0f,%.0f) -> gains (%d,%d,%d)\n", wide[0], wide[1], wide[2], reads,
 +            targets[0], targets[1], targets[2], gains[0], gains[1], gains[2]);
 +
 +        // Final offsets: optical black at 0x500 with those gains.
@@ -248,7 +284,7 @@ index 8b6a1cb..33f8f39 100644
      auto dark_raw = gl128_acquire_shading_strip(dev, w, false);
      auto dark = gl128_average_columns_chunky(dark_raw, w.pixels, GL128_SHADING_LINES);
      auto dark_flat = gl128_parity_dark(dark);
-@@ -1177,7 +1362,7 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+@@ -1177,7 +1398,7 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
      // until lit and steady (< 2%), at most 10 s. The unity table is uploaded
      // afterwards, since strip data lands in the same AHB RAM.
      gl128_lamp_on(dev);
@@ -257,7 +293,7 @@ index 8b6a1cb..33f8f39 100644
      {
          double prev = 0.0;
          for (int i = 0; i < 20; i++) {
-@@ -1194,8 +1379,7 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+@@ -1194,8 +1415,7 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
          gl128_reset_stationary_scan_engine(dev, "post relight");
      }
      dev->interface->write_ahb(GL128_AHB_SHADING, unity.size(), unity.data());
@@ -267,7 +303,7 @@ index 8b6a1cb..33f8f39 100644
      gl128_upload_image_tables(dev, w.asic_dpi);
      auto white_raw = gl128_acquire_shading_strip(dev, w, true);
      auto white = gl128_average_columns_chunky(white_raw, w.pixels, GL128_SHADING_LINES);
-@@ -1227,12 +1411,9 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+@@ -1227,12 +1447,9 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
      auto measured = gl128_pack_shading_table(dark_flat, gains, declared);
      dev->interface->write_ahb(GL128_AHB_SHADING, measured.size(), measured.data());
      dev->interface->write_register(REG_0x02, 0x00);
@@ -284,7 +320,7 @@ index 8b6a1cb..33f8f39 100644
      // Depth registers back to 8-bit before the feeds (SilverFast writes 0x33
      // twice, 0x17 then 0x1f).
 diff --git a/backend/genesys/gl128.h b/backend/genesys/gl128.h
-index 6a4d6a1..3c22f8c 100644
+index 6a4d6a1..1c394dc 100644
 --- a/backend/genesys/gl128.h
 +++ b/backend/genesys/gl128.h
 @@ -33,6 +33,10 @@
@@ -298,7 +334,7 @@ index 6a4d6a1..3c22f8c 100644
  namespace genesys {
  namespace gl128 {
  
-@@ -109,6 +113,22 @@ unsigned gl128_asic_dpi(const Genesys_Sensor& sensor);
+@@ -109,6 +113,25 @@ unsigned gl128_asic_dpi(const Genesys_Sensor& sensor);
  // the host averages factor x factor blocks.
  unsigned gl128_host_downsample(const Genesys_Sensor& sensor, unsigned xres);
  
@@ -312,6 +348,9 @@ index 6a4d6a1..3c22f8c 100644
 +                            double target, int* offset);
 +// 6-bit PGA gain code from the mean of the wide strip read at gain 0.
 +int gl128_gain_for_wide_mean(double mean, double target);
++// True when every channel of `current` is within `tolerance` (a fraction) of `previous`.
++bool gl128_strip_settled(const std::array<double, 3>& previous, const std::array<double, 3>& current,
++                         double tolerance);
 +// Per-channel means of a chunky (RGBRGB) 16-bit strip: of all `pixels`, or of the shielded
 +// optical-black columns 2-55.
 +std::array<double, 3> gl128_chunky_means(const std::vector<std::uint8_t>& strip, unsigned pixels);
@@ -322,7 +361,7 @@ index 6a4d6a1..3c22f8c 100644
  } // namespace genesys
  
 diff --git a/testsuite/backend/genesys/tests_gl128.cpp b/testsuite/backend/genesys/tests_gl128.cpp
-index 0855b67..e16e975 100644
+index 0855b67..0f74304 100644
 --- a/testsuite/backend/genesys/tests_gl128.cpp
 +++ b/testsuite/backend/genesys/tests_gl128.cpp
 @@ -31,6 +31,8 @@
@@ -334,7 +373,7 @@ index 0855b67..e16e975 100644
  
  namespace genesys {
  
-@@ -310,6 +312,83 @@ void test_gl128_afe_survives_register_flush()
+@@ -310,6 +312,92 @@ void test_gl128_afe_survives_register_flush()
      }
  }
  
@@ -415,10 +454,19 @@ index 0855b67..e16e975 100644
 +    ASSERT_TRUE(all[0] > 30000.0 && all[1] > all[0] && all[2] > all[1]);
 +}
 +
++void test_gl128_afe_warmup_settle()
++{
++    const std::array<double, 3> a = { 30000.0, 40000.0, 35000.0 };
++    ASSERT_TRUE(gl128::gl128_strip_settled(a, { 30050.0, 39950.0, 35060.0 }, 0.002));   // < 0.2%
++    ASSERT_FALSE(gl128::gl128_strip_settled(a, { 30000.0, 40200.0, 35000.0 }, 0.002));  // green 0.5%
++    ASSERT_FALSE(gl128::gl128_strip_settled({ 0.0, 0.0, 0.0 }, { 500.0, 0.0, 0.0 }, 0.002));
++    ASSERT_TRUE(gl128::gl128_strip_settled(a, a, 0.0));
++}
++
  void test_gl128()
  {
      genesys_init_usb_device_tables();
-@@ -324,6 +403,10 @@ void test_gl128()
+@@ -324,6 +412,11 @@ void test_gl128()
      test_gl128_session_gray();
      test_gl128_boot_does_not_cache_fe_bridge();
      test_gl128_afe_survives_register_flush();
@@ -426,6 +474,7 @@ index 0855b67..e16e975 100644
 +    test_gl128_afe_offset_search();
 +    test_gl128_afe_gain_search();
 +    test_gl128_afe_strip_means();
++    test_gl128_afe_warmup_settle();
  }
  
  } // namespace genesys
