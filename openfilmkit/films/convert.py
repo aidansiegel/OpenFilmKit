@@ -147,14 +147,20 @@ def slide_lut(model,low,high):
     srgb=np.where(linear<=.0031308,12.92*linear,1.055*np.maximum(linear,0)**(1/2.4)-.055)
     table[:]=np.rint(np.clip(srgb,0,1)*65535).astype(np.uint16);return table
 
-def render(raw,lut,contrast=1.3,gamma=1.0,warmth=0.0,top=255):
-    """Viewing pixels from raw RGB16 through the LUT; top: 255 for 8-bit output, 65535 for 16-bit."""
+def render(raw,lut,contrast=1.3,gamma=1.0,warmth=0.0,top=255,saturation=1.0):
+    """Viewing pixels from raw RGB16 through the LUT; top: 255 for 8-bit output, 65535 for 16-bit.
+    saturation scales each pixel's color away from (above 1) or toward (below 1) its own gray, in
+    linear light at constant luminance, before the tone curve; 1 leaves the pixels as they were."""
     if not (.1<=contrast<=4 and .1<=gamma<=4 and -1<=warmth<=1):raise ValueError('Contrast/gamma must be 0.1–4; warmth must be -1–1.')
+    if not 0<=saturation<=3:raise ValueError('Saturation must be 0–3.')
     a=np.stack([lut[raw[:,:,c],c] for c in range(3)],2).astype(float)/65535
     weights=np.array([.2126,.7152,.0722]);L=np.sum(a*weights,2,keepdims=True)
     if warmth:
         strength=np.clip((.98-L)/.18,0,1);a*=1+strength*(np.array([.08,0,-.12])*warmth)
         a*=L/np.maximum(np.sum(a*weights,2,keepdims=True),1e-10)
+    if saturation!=1:
+        a=np.maximum(L+(a-L)*saturation,0)
+        a*=L/np.maximum(np.sum(a*weights,2,keepdims=True),1e-10)   # back to the pixel's luminance
     v=np.clip(L,0,1);up=v**contrast;down=(1-v)**contrast;target=(up/(up+down))**(1/gamma)
     return np.rint(np.clip(a*target/np.maximum(L,1e-10),0,1)*top).astype(np.uint8 if top==255 else np.uint16)
 
@@ -188,6 +194,9 @@ def convert(args,root=film_stocks.DATA):
     if model['kind']!='generic' and model.get('film','color-negative')!=film:raise ValueError(f"Profile {model['id']} is for {model.get('film','color-negative')} film, not {film}.")
     if args.contrast is None:args.contrast=1.0 if film=='slide' else 1.3  # a slide already carries its own contrast
     if not (.1<=args.contrast<=4 and .1<=args.gamma<=4 and -1<=args.warmth<=1):raise ValueError('Contrast/gamma must be 0.1–4; warmth must be -1–1.')
+    saturation=getattr(args,'saturation',1.0)
+    if saturation is None:saturation=1.0
+    if not 0<=saturation<=3:raise ValueError('Saturation must be 0–3.')
     digest=sha(source)
     if meta.get('sha256') and meta['sha256']!=digest:raise ValueError('Source TIFF does not match its capture checksum.')
     raw=raw_open(source);h,w=raw.shape[:2];box=args.crop or [0,0,w,h];x0,y0,x1,y1=box
@@ -227,8 +236,9 @@ def convert(args,root=film_stocks.DATA):
                 strip=shrink(area[start*stride:(start+64)*stride],stride)
                 if calibrated:
                     if args.warmth:raise ValueError('Use neutral scene anchors instead of warmth with density calibration.')
+                    if saturation!=1:raise ValueError('Saturation is not available with density calibration yet.')
                     pixels[start:start+64]=film_density.render_density(strip,lut,args.contrast,args.gamma,calibrated['recover_clipped_blue'],top)
-                else:pixels[start:start+64]=render(strip,lut,args.contrast,args.gamma,args.warmth,top)
+                else:pixels[start:start+64]=render(strip,lut,args.contrast,args.gamma,args.warmth,top,saturation)
             pixels.flush();icc=srgb_icc()
             if deep:write_tiff(made[dest],pixels,icc)
             else:
@@ -239,7 +249,7 @@ def convert(args,root=film_stocks.DATA):
             del pixels
         scratch.unlink(missing_ok=True)
         np.save(made[lutfile],lut)
-        record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,output_dimensions=[ww,hh],source_dimensions=[w,h],downscale=dict(method='block average',block=stride) if stride>1 else None,channel_health=health,output=str(dest),output_sha256=sha(made[dest]),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(made[lutfile]),raw_tiffs_modified=False,approved=False)
+        record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,saturation=saturation,output_dimensions=[ww,hh],source_dimensions=[w,h],downscale=dict(method='block average',block=stride) if stride>1 else None,channel_health=health,output=str(dest),output_sha256=sha(made[dest]),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(made[lutfile]),raw_tiffs_modified=False,approved=False)
         if calibrated:record['density_calibration']=calibrated
         if sha(source)!=digest:raise ValueError('Source checksum changed during conversion.')
         made[recipe].write_text(json.dumps(record,indent=2)+'\n')
