@@ -66,6 +66,7 @@ class Openfilmkit < Formula
     output = shell_output("#{bin}/openfilmkit doctor --json", 2)
     assert_match "8ebb7c50", output
     assert_match "0001-gl128-afe-port-replay.diff", output
+    assert_match "0002-gl128-afe-search.diff", output
     assert_match "agfa-hdc200", shell_output("#{bin}/openfilmkit profiles")
   end
 end
