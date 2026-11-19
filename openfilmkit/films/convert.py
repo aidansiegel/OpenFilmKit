@@ -223,6 +223,15 @@ def convert(args,root=film_stocks.DATA):
         lut=film_density.density_lut(model,plan['film_base_transmission_rgb'],scene['density_offsets_rgb'],scene['density_black'],scene['density_white'],profile_strength=plan.get('profile_strength',.4),mid=scene.get('density_mid'),mid_target=scene.get('density_mid_target',.58))
         calibrated=dict(plan=str(plan_path),plan_sha256=sha(plan_path),scene=scene,film_base_transmission_rgb=plan['film_base_transmission_rgb'],recover_clipped_blue=bool(saved_roll.get('recover_clipped_blue',False) if getattr(args,'recover_clipped_blue',None) is None else args.recover_clipped_blue),note='Measured viewing correction; missing blue estimates are not restored capture detail.')
     else:lut=slide_lut(model,lo,hi) if film=='slide' else make_lut(model,lo,hi)
+    lut_source=None
+    if getattr(args,'lut',None):
+        # An approved per-channel curve (raw code -> output, 65536 x 3 uint16), e.g. one a keeper was graded with.
+        if calibrated:raise ValueError('Choose a density calibration or --lut, not both.')
+        lut_path=Path(args.lut).expanduser().resolve()
+        try:given=np.load(lut_path,allow_pickle=False)
+        except (OSError,ValueError) as e:raise ValueError(f'--lut {lut_path}: not a NumPy array file ({e})')
+        if given.shape!=(65536,3) or given.dtype!=np.uint16:raise ValueError(f'--lut {lut_path}: want a 65536 x 3 uint16 array, got {given.shape} {given.dtype}')
+        lut=given;lut_source=dict(path=str(lut_path),sha256=sha(lut_path),note='Applied as given; the levels below were measured but not used.')
     stride=1 if args.max_side==0 else max(1,math.ceil(max(area.shape[:2])/args.max_side));hh,ww=-(-area.shape[0]//stride),-(-area.shape[1]//stride)
     dest.parent.mkdir(parents=True,exist_ok=True)
     # The picture, its LUT and its recipe are each written under another name and given their own only once all are
@@ -249,7 +258,7 @@ def convert(args,root=film_stocks.DATA):
             del pixels
         scratch.unlink(missing_ok=True)
         np.save(made[lutfile],lut)
-        record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,saturation=saturation,output_dimensions=[ww,hh],source_dimensions=[w,h],downscale=dict(method='block average',block=stride) if stride>1 else None,channel_health=health,output=str(dest),output_sha256=sha(made[dest]),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(made[lutfile]),raw_tiffs_modified=False,approved=False)
+        record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,saturation=saturation,lut_source=lut_source,output_dimensions=[ww,hh],source_dimensions=[w,h],downscale=dict(method='block average',block=stride) if stride>1 else None,channel_health=health,output=str(dest),output_sha256=sha(made[dest]),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(made[lutfile]),raw_tiffs_modified=False,approved=False)
         if calibrated:record['density_calibration']=calibrated
         if sha(source)!=digest:raise ValueError('Source checksum changed during conversion.')
         made[recipe].write_text(json.dumps(record,indent=2)+'\n')

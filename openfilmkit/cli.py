@@ -714,6 +714,9 @@ def parser():
     s.add_argument('--warmth', type=float, default=0.0, help='small balance adjustment, -1 to +1')
     s.add_argument('--saturation', type=float, default=1.0,
                    help='color strength, 0 (gray) to 3; 1 leaves it as scanned (default)')
+    s.add_argument('--lut', metavar='FILE',
+                   help='apply an approved curve (a 65536 x 3 uint16 .npy, raw code to output) instead of '
+                        'fitting one; with --contrast 1 it is applied as is')
 
     s = sub.add_parser('check', parents=[common],
                        help="what each channel of a scan holds: clipping at 0 or full scale, and codes a digital "

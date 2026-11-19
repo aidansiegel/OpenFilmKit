@@ -73,6 +73,28 @@ class Saturation(unittest.TestCase):
             args.output = str(root / 'w.png')
             self.assertEqual(conversion.convert(args)['saturation'], 1.0)
 
+    def test_an_approved_lut_is_applied_as_given(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            raw = np.random.default_rng(2).integers(1000, 60000, (40, 60, 3)).astype(np.uint16)
+            tifffile.imwrite(root / 'raw.tif', raw, photometric='rgb')
+            ramp = (65535 - np.arange(65536)).astype(np.uint16)       # an inverting curve
+            given = np.stack([ramp, ramp, ramp], 1)
+            np.save(root / 'keeper-lut.npy', given)
+            args = argparse.Namespace(source=str(root / 'raw.tif'), output=str(root / 'v.tif'), stock='kirkland-200',
+                                      roll=None, profile='agfa-hdc200', crop=None, levels_from=None, max_side=0,
+                                      contrast=1.0, gamma=1., warmth=0., saturation=1.0,
+                                      lut=str(root / 'keeper-lut.npy'), tiff=True)
+            record = conversion.convert(args)
+            self.assertEqual(record['lut_source']['path'], str((root / 'keeper-lut.npy').resolve()))
+            out = tifffile.imread(root / 'v.tif')
+            expected = 65535 - raw.astype(int)
+            self.assertLessEqual(int(np.abs(out.astype(int) - expected).max()), 2)
+            np.save(root / 'bad.npy', np.zeros((10, 3), np.uint16))
+            args.lut, args.output = str(root / 'bad.npy'), str(root / 'w.tif')
+            with self.assertRaisesRegex(ValueError, '65536 x 3'):
+                conversion.convert(args)
+
 
 if __name__ == '__main__':
     unittest.main()
