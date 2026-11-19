@@ -1,0 +1,60 @@
+diff --git a/backend/genesys/gl128.cpp b/backend/genesys/gl128.cpp
+index d0b05f2..1d45756 100644
+--- a/backend/genesys/gl128.cpp
++++ b/backend/genesys/gl128.cpp
+@@ -36,6 +36,9 @@
+ #include <algorithm>
+ #include <array>
+ #include <chrono>
++#include <cstdlib>
++#include <sstream>
++#include <locale>
+ #include <cmath>
+ #include <functional>
+ #include <iterator>
+@@ -1327,6 +1330,45 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+     };
+ 
+     const Gl128AfeSearch* search = gl128_afe_search_for(dev->model->sensor_id);
++    // OpenFilmKit test switches (not for upstream): OPENFILMKIT_GL128_FIXED_AFE=1 keeps the
++    // fixed codes, OPENFILMKIT_GL128_AFE_TARGETS="r,g,b" sets the gain step's white targets,
++    // OPENFILMKIT_GL128_WARMUP_READS=n caps the warm-up re-reads (1 = a single read).
++    Gl128AfeSearch tuned;
++    if (search) {
++        tuned = *search;
++        auto numbers = [](const char* text, std::vector<double>* out) {
++            std::istringstream in(text);
++            in.imbue(std::locale::classic());
++            double v = 0;
++            char sep = 0;
++            while (in >> v) {
++                out->push_back(v);
++                if (!(in >> sep) || sep != ',') {
++                    break;
++                }
++            }
++        };
++        if (const char* e = std::getenv("OPENFILMKIT_GL128_AFE_TARGETS")) {
++            std::vector<double> v;
++            numbers(e, &v);
++            if (v.size() == 3 && v[0] > 1000 && v[1] > 1000 && v[2] > 1000) {
++                tuned.white_targets = { v[0], v[1], v[2] };
++            }
++        }
++        if (const char* e = std::getenv("OPENFILMKIT_GL128_WARMUP_READS")) {
++            std::vector<double> v;
++            numbers(e, &v);
++            if (v.size() == 1 && v[0] >= 1 && v[0] <= 60) {
++                tuned.max_settle_reads = static_cast<unsigned>(v[0]);
++            }
++        }
++        search = &tuned;
++        const char* fixed = std::getenv("OPENFILMKIT_GL128_FIXED_AFE");
++        if (fixed && fixed[0] == '1') {
++            DBG(DBG_info, "GL128 AFE search: off (OPENFILMKIT_GL128_FIXED_AFE), fixed codes\n");
++            search = nullptr;
++        }
++    }
+     bool searched = search && search_afe(*search);
+     if (!searched) {
+         if (search) {

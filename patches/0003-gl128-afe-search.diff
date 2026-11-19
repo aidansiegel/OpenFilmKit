@@ -1,0 +1,612 @@
+diff --git a/backend/genesys/gl128.cpp b/backend/genesys/gl128.cpp
+index 01aa1b0..d0b05f2 100644
+--- a/backend/genesys/gl128.cpp
++++ b/backend/genesys/gl128.cpp
+@@ -287,39 +287,6 @@ unsigned gl128_afe_strip_pixels(const Genesys_Device* dev, bool wide)
+     return (wide ? t.afe_wide_endpixel : t.afe_endpixel) - t.afe_strpixel;
+ }
+ 
+-// Mean R/G/B of a 16-bit LE strip, planar (RRR...GGG...BBB...) or
+-// interleaved (RGBRGB...).
+-std::array<double, 3> gl128_channel_means_u16(const std::vector<std::uint8_t>& strip,
+-                                              unsigned pixels, bool planar)
+-{
+-    const std::size_t expected = static_cast<std::size_t>(pixels) * 3 * 2;
+-    if (strip.size() < expected) {
+-        throw SaneException("GL128: AFE strip too short: %zu < %zu",
+-                            strip.size(), expected);
+-    }
+-    double sums[3] = {0.0, 0.0, 0.0};
+-    if (planar) {
+-        const std::size_t plane = static_cast<std::size_t>(pixels) * 2;
+-        for (int c = 0; c < 3; c++) {
+-            const std::size_t base = static_cast<std::size_t>(c) * plane;
+-            for (unsigned i = 0; i < pixels; i++) {
+-                std::size_t off = base + static_cast<std::size_t>(i) * 2;
+-                sums[c] += static_cast<double>(strip[off] | (strip[off + 1] << 8));
+-            }
+-        }
+-    } else {
+-        for (unsigned i = 0; i < pixels; i++) {
+-            std::size_t base = static_cast<std::size_t>(i) * 6;
+-            for (int c = 0; c < 3; c++) {
+-                std::size_t off = base + static_cast<std::size_t>(c) * 2;
+-                sums[c] += static_cast<double>(strip[off] | (strip[off + 1] << 8));
+-            }
+-        }
+-    }
+-    return { sums[0] / pixels, sums[1] / pixels, sums[2] / pixels };
+-}
+-
+-
+ // Lamp control: single writes of 0x03. 0x37 (infrared LED) is written only at
+ // boot, as SilverFast does for colour scans; infrared is not supported yet.
+ void gl128_lamp_on(Genesys_Device* dev)
+@@ -681,8 +648,9 @@ void gl128_setup_shading_strip_regs(const Gl128DeviceTables& tables, const Genes
+     gl128_init_reg24(&regs, REG_LPERIOD, timing.lperiod);
+     gl128_init_reg24(&regs, REG_EXPOSURE, tables.exposure);
+     // Same depth registers as the image pass (chunky 16-bit RGB), so genesys
+-    // can average the data as interleaved RGB. SilverFast's DEPTH16 setting
+-    // returns planar lines.
++    // can average the data as interleaved RGB. (The AFE strips use DEPTH16
++    // and come back interleaved too: read as planar, the three channels of a
++    // lamp-on strip would come out equal, and they don't.)
+     regs.init_reg(REG_DEPTH_A, DEPTH8_A);
+     regs.init_reg(REG_DEPTH_B, DEPTH8_B);
+ 
+@@ -845,6 +813,120 @@ void gl128_wait_feed_done(Genesys_Device* dev, unsigned steps, double timeout_s)
+                         steps, timeout_s, motion_seen ? "yes" : "no");
+ }
+ 
++} // namespace
++
++// --- Front-end (AFE) search ---------------------------------------------------
++// SilverFast measures the front end before each scan instead of using fixed codes:
++// offsets that put the shielded optical-black pixels just above 0 at gain 0, PGA gains from a
++// lamp-on strip read at gain 0, then offsets that put optical black at 0x500 at those gains for
++// the dark strip, and a few codes higher for the image. The sequence and its constants are as
++// recorded in SilverFast's USB traffic with the 8200i SE and published by the pyopticfilm
++// project, which replays SilverFast's searches to within one gain code; this is an independent
++// implementation of that method.
++//
++// Fixed codes taken from one SilverFast session don't fit every unit: on one 8200i SE they put
++// the white strip at the 16-bit ceiling in all three channels, so the shading table had no
++// white reference to correct, and green lost 70-84% of its codes, more as the session went on.
++// Searched, every channel's white strip landed within 1% of its target and green kept all but
++// about 1% of its codes, with the same gains over 20 minutes, at 3600 and 7200 dpi.
++
++const Gl128AfeSearch GL128_AFE_SEARCH[] = {
++    {
++        SensorId::CCD_PLUSTEK_OPTICFILM_8200I_SE,
++        // Columns 0-59 of the AFE strip (from STRPIXEL) are shielded; 2-55 are averaged.
++        2, 56,
++        // SilverFast puts optical black at 48 for its gain strip and at 0x500 for its dark strip,
++        // then settles its image offsets 6-8 codes higher: about 230 counts at its gains, so the
++        // image's black stays above 0 after the dark term is subtracted.
++        48.0, 1280.0, 230.0,
++        // SilverFast's gain step aims at 47000/53575/53575 on a strip read straight after idle,
++        // which reads about 7% low; read after a throwaway strip, as here, the same gains come
++        // from these targets.
++        { 50518.0, 55518.0, 56428.0 },
++        8000.0,
++        // Re-read the gain strip until no channel moves more than 0.2%, at most 8 times.
++        0.002, 8,
++    },
++};
++
++const Gl128AfeSearch* gl128_afe_search_for(SensorId sensor_id)
++{
++    for (const auto& s : GL128_AFE_SEARCH) {
++        if (s.sensor_id == sensor_id) {
++            return &s;
++        }
++    }
++    return nullptr;
++}
++
++int gl128_decode_afe_offset(unsigned code)
++{
++    int magnitude = static_cast<int>(code & 0xff);
++    return (code & 0x100) ? -magnitude : magnitude;
++}
++
++unsigned gl128_encode_afe_offset(int value)
++{
++    int v = std::max(-0xff, std::min(0xff, value));
++    return v < 0 ? (0x100u | static_cast<unsigned>(-v)) : static_cast<unsigned>(v);
++}
++
++bool gl128_offset_for_black(double at_low, double at_high, int low_code, int high_code,
++                            double target, int* offset)
++{
++    const double per_code = (at_high - at_low) / static_cast<double>(high_code - low_code);
++    if (!(per_code >= 4.0)) {
++        return false;
++    }
++    // nearbyint() rounds half to even.
++    double value = std::nearbyint(low_code + (target - at_low) / per_code);
++    *offset = static_cast<int>(std::max(-255.0, std::min(255.0, value)));
++    return true;
++}
++
++int gl128_gain_for_wide_mean(double mean, double target)
++{
++    int code = static_cast<int>(std::floor(75.6 - 75.6 * mean / target));
++    return std::max(0, std::min(0x3f, code));
++}
++
++std::array<double, 3> gl128_chunky_means(const std::vector<std::uint8_t>& strip, unsigned pixels,
++                                         unsigned first, unsigned end)
++{
++    if (first >= end || end > pixels || strip.size() < static_cast<std::size_t>(end) * 6) {
++        throw SaneException("GL128: AFE strip too short: %zu bytes for columns %u-%u",
++                            strip.size(), first, end);
++    }
++    double sums[3] = { 0.0, 0.0, 0.0 };
++    for (unsigned i = first; i < end; i++) {
++        for (int c = 0; c < 3; c++) {
++            std::size_t off = static_cast<std::size_t>(i) * 6 + c * 2;
++            sums[c] += static_cast<double>(strip[off] | (strip[off + 1] << 8));
++        }
++    }
++    const double n = end - first;
++    return { sums[0] / n, sums[1] / n, sums[2] / n };
++}
++
++std::array<double, 3> gl128_chunky_means(const std::vector<std::uint8_t>& strip, unsigned pixels)
++{
++    return gl128_chunky_means(strip, pixels, 0, pixels);
++}
++
++bool gl128_strip_settled(const std::array<double, 3>& previous, const std::array<double, 3>& current,
++                         double tolerance)
++{
++    for (int c = 0; c < 3; c++) {
++        double base = std::max(1.0, previous[c]);
++        if (!(std::abs(current[c] - previous[c]) <= tolerance * base)) {
++            return false;
++        }
++    }
++    return true;
++}
++
++namespace {
++
+ // --- ASIC (hardware) shading -------------------------------------------------
+ // The ASIC applies an uploaded dark/gain table to the image when 0x01 has
+ // DVDSET, as SilverFast does; genesys' host-side correction is disabled for
+@@ -1086,25 +1168,42 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+         dev->cmd_set->set_fe(dev, sensor, AFE_SET);
+     };
+     const auto& t = gl128_device_tables(dev);
+-    const std::array<int, 3>& strip_gains = t.strip_gains;
++    const unsigned narrow_px = gl128_afe_strip_pixels(dev, false);
++    const unsigned wide_px = gl128_afe_strip_pixels(dev, true);
++    const std::array<int, 3> zero_gains = { 0, 0, 0 };
++    auto offset_codes = [](int r, int g, int b) {
++        return std::array<int, 3>{ static_cast<int>(gl128_encode_afe_offset(r)),
++                                   static_cast<int>(gl128_encode_afe_offset(g)),
++                                   static_cast<int>(gl128_encode_afe_offset(b)) };
++    };
++
++    // Front-end codes: the device's fixed ones, replaced by the search's below.
++    std::array<int, 3> strip_gains = t.strip_gains;            // dark, relight, white strips
++    std::array<int, 3> image_gains;
++    for (int c = 0; c < 3; c++) {
++        image_gains[c] = std::min(0x3f, t.strip_gains[c] + t.image_gain_delta[c]);
++    }
++    std::array<int, 3> white_offsets = t.white_offsets;        // relight, white strip, image
++    std::array<int, 3> dark_offsets = t.dark_offsets;
++    std::array<int, 3> after_probe_offsets = t.after_probe_offsets;
+ 
+     // Cold start: the lamp needs to warm up, or the white strip (62 ms after
+     // switching on, as SilverFast) reads 0. Read stationary lamp-on strips
+-    // once a second until the brightest channel changes < 1% over three
+-    // readings (at least 5 s, at most 60 s).
++    // once a second until no channel changes by more than 1% over three
++    // readings (at least 5 s, at most 60 s). Gain 0, so that no channel sits
++    // at the ADC ceiling, where it would look steady while still warming.
+     if (dev->lamp_warmup_pending) {
+         gl128_lamp_on(dev);
+-        apply_fe(strip_gains, t.white_offsets);
+-        double prev = 0.0;
++        apply_fe(zero_gains, offset_codes(0x80, 0x80, 0x80));
++        std::array<double, 3> prev = { 0.0, 0.0, 0.0 };
+         int stable = 0;
+         for (int i = 0; i < 60; i++) {
+             std::this_thread::sleep_for(std::chrono::seconds(1));
+-            auto strip = gl128_acquire_afe_strip(dev, sensor, false);
+-            auto m = gl128_channel_means_u16(strip, gl128_afe_strip_pixels(dev, false), true);
+-            double peak = std::max({ m[0], m[1], m[2] });
+-            DBG(DBG_info, "GL128 cold lamp warm-up %ds: peak=%.0f\n", i + 1, peak);
+-            stable = (prev > 0.0 && std::abs(peak - prev) < 0.01 * peak) ? stable + 1 : 0;
+-            prev = peak;
++            auto m = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, false), narrow_px);
++            DBG(DBG_info, "GL128 cold lamp warm-up %ds: (%.0f,%.0f,%.0f)\n", i + 1,
++                m[0], m[1], m[2]);
++            stable = (i > 0 && gl128_strip_settled(prev, m, 0.01)) ? stable + 1 : 0;
++            prev = m;
+             if (i >= 4 && stable >= 3) {
+                 break;
+             }
+@@ -1128,35 +1227,138 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+     }
+ 
+     // AFE probes with the lamp on (0x03=0x30), one strip each (one of them
+-    // over the full width), then the after-probe gains.
++    // over the full width), then the after-probe codes.
+     gl128_lamp_on(dev);
+     // GPO 0xa7 and 0xa9 are 1 for the probes and both strips; the feed
+     // registers set them back to 0.
+     dev->interface->write_register(0xA7, 0x01);
+     dev->interface->write_register(0xA9, 0x01);
+-    // The probe means are logged; on the 8200i SE they match SilverFast's own
+-    // probes (its 7200 dpi capture: 17916/26915/27464 and 20026/29301/29962
+-    // for the first two) when the clock set-up is right.
+-    for (std::size_t i = 0; i < t.probes.size(); i++) {
+-        const auto& p = t.probes[i];
+-        apply_fe(p.gains, p.offsets);
+-        if (i == t.wide_probe_index) {
+-            gl128_acquire_afe_strip(dev, sensor, true);
+-            continue;
++    // Measure the front end (see "Front-end (AFE) search" above), or run the
++    // device's fixed probe sequence and keep its fixed codes.
++    auto search_afe = [&](const Gl128AfeSearch& sp) -> bool {
++        // A throwaway strip first: after idle, the first line reads optical
++        // black high by up to ~600 counts.
++        apply_fe(zero_gains, offset_codes(0x80, 0x80, 0x80));
++        gl128_acquire_afe_strip(dev, sensor, false);
++
++        // Offsets for optical black at pre_black, gain 0.
++        auto lo = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, false), narrow_px,
++                                     sp.black_first, sp.black_end);
++        apply_fe(zero_gains, offset_codes(0xff, 0xff, 0xff));
++        auto hi = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, false), narrow_px,
++                                     sp.black_first, sp.black_end);
++        std::array<int, 3> pre;
++        for (int c = 0; c < 3; c++) {
++            if (!gl128_offset_for_black(lo[c], hi[c], 0x80, 0xff, sp.pre_black, &pre[c])) {
++                DBG(DBG_warn, "GL128 AFE search: ch%d optical black barely moved (%.0f -> %.0f)\n",
++                    c, lo[c], hi[c]);
++                return false;
++            }
++        }
++        DBG(DBG_info, "GL128 AFE search: black at 0x80 (%.0f,%.0f,%.0f), at 0xff (%.0f,%.0f,%.0f) "
++            "-> pre-offsets (%d,%d,%d)\n", lo[0], lo[1], lo[2], hi[0], hi[1], hi[2],
++            pre[0], pre[1], pre[2]);
++
++        // The lamp-on strip at gain 0, re-read until it settles.
++        apply_fe(zero_gains, offset_codes(pre[0], pre[1], pre[2]));
++        auto wide = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, true), wide_px);
++        for (int c = 0; c < 3; c++) {
++            if (wide[c] < sp.min_lit) {
++                DBG(DBG_warn, "GL128 AFE search: ch%d lamp-on strip too dark (%.0f); lamp not lit?\n",
++                    c, wide[c]);
++                return false;
++            }
++        }
++        unsigned reads = 1;
++        bool settled = sp.max_settle_reads <= 1;
++        while (!settled && reads < sp.max_settle_reads) {
++            std::this_thread::sleep_for(std::chrono::milliseconds(300));
++            auto next = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, true), wide_px);
++            reads++;
++            settled = gl128_strip_settled(wide, next, sp.settle);
++            DBG(DBG_info, "GL128 AFE warm-up read %u: (%.0f,%.0f,%.0f)%s\n", reads,
++                next[0], next[1], next[2], settled ? " settled" : "");
++            wide = next;
++        }
++        if (!settled) {
++            DBG(DBG_warn, "GL128 AFE warm-up: lamp-on strip still moving after %u reads; using the "
++                "last\n", reads);
++        }
++        std::array<int, 3> gains;
++        for (int c = 0; c < 3; c++) {
++            gains[c] = gl128_gain_for_wide_mean(wide[c], sp.white_targets[c]);
++        }
++        DBG(DBG_info, "GL128 AFE search: wide strip at gain 0 (%.0f,%.0f,%.0f) after %u read(s), "
++            "targets (%.0f,%.0f,%.0f) -> gains (%d,%d,%d)\n", wide[0], wide[1], wide[2], reads,
++            sp.white_targets[0], sp.white_targets[1], sp.white_targets[2],
++            gains[0], gains[1], gains[2]);
++
++        // Offsets at those gains: optical black at `black` for the dark strip,
++        // `image_pedestal` higher for the white strip and the image.
++        apply_fe(gains, offset_codes(0x80, 0x80, 0x80));
++        lo = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, false), narrow_px,
++                                sp.black_first, sp.black_end);
++        apply_fe(gains, offset_codes(0xff, 0xff, 0xff));
++        hi = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, false), narrow_px,
++                                sp.black_first, sp.black_end);
++        std::array<int, 3> dark, image;
++        for (int c = 0; c < 3; c++) {
++            if (!gl128_offset_for_black(lo[c], hi[c], 0x80, 0xff, sp.black, &dark[c]) ||
++                !gl128_offset_for_black(lo[c], hi[c], 0x80, 0xff, sp.black + sp.image_pedestal,
++                                        &image[c]))
++            {
++                DBG(DBG_warn, "GL128 AFE search: ch%d optical black barely moved (%.0f -> %.0f)\n",
++                    c, lo[c], hi[c]);
++                return false;
++            }
++        }
++        DBG(DBG_info, "GL128 AFE search: black at 0x80 (%.0f,%.0f,%.0f), at 0xff (%.0f,%.0f,%.0f) "
++            "-> offsets (%d,%d,%d), dark (%d,%d,%d)\n", lo[0], lo[1], lo[2], hi[0], hi[1], hi[2],
++            image[0], image[1], image[2], dark[0], dark[1], dark[2]);
++
++        // The same gains for the white strip and the image, so the shading
++        // table normalizes the image to the white it measured.
++        strip_gains = gains;
++        image_gains = gains;
++        white_offsets = offset_codes(image[0], image[1], image[2]);
++        dark_offsets = offset_codes(dark[0], dark[1], dark[2]);
++        after_probe_offsets = dark_offsets;
++        return true;
++    };
++
++    const Gl128AfeSearch* search = gl128_afe_search_for(dev->model->sensor_id);
++    bool searched = search && search_afe(*search);
++    if (!searched) {
++        if (search) {
++            DBG(DBG_warn, "GL128 AFE search: failed; fixed codes\n");
++        }
++        // The fixed probe sequence, logged; on the 8200i SE its probes match
++        // SilverFast's own (its 7200 dpi capture: 17916/26915/27464 and
++        // 20026/29301/29962 for the first two) when the clock set-up is right.
++        for (std::size_t i = 0; i < t.probes.size(); i++) {
++            const auto& p = t.probes[i];
++            apply_fe(p.gains, p.offsets);
++            const bool wide = i == t.wide_probe_index;
++            auto m = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, wide),
++                                        wide ? wide_px : narrow_px);
++            DBG(DBG_info, "GL128 AFE probe gains (%d,%d,%d) offsets (%d,%d,%d): "
++                "means=(%.0f,%.0f,%.0f)\n",
++                p.gains[0], p.gains[1], p.gains[2], p.offsets[0], p.offsets[1], p.offsets[2],
++                m[0], m[1], m[2]);
+         }
+-        auto strip = gl128_acquire_afe_strip(dev, sensor, false);
+-        auto m = gl128_channel_means_u16(strip, gl128_afe_strip_pixels(dev, false), true);
+-        DBG(DBG_info, "GL128 AFE probe gains (%d,%d,%d) offsets (%d,%d,%d): "
+-            "means=(%.0f,%.0f,%.0f)\n",
+-            p.gains[0], p.gains[1], p.gains[2], p.offsets[0], p.offsets[1], p.offsets[2],
+-            m[0], m[1], m[2]);
+     }
+-    apply_fe(strip_gains, t.after_probe_offsets);
++    DBG(DBG_info, "GL128 AFE codes: gains white (%d,%d,%d) image (%d,%d,%d), offsets white "
++        "(%d,%d,%d) dark (%d,%d,%d)\n", strip_gains[0], strip_gains[1], strip_gains[2],
++        image_gains[0], image_gains[1], image_gains[2],
++        gl128_decode_afe_offset(white_offsets[0]), gl128_decode_afe_offset(white_offsets[1]),
++        gl128_decode_afe_offset(white_offsets[2]), gl128_decode_afe_offset(dark_offsets[0]),
++        gl128_decode_afe_offset(dark_offsets[1]), gl128_decode_afe_offset(dark_offsets[2]));
++    apply_fe(strip_gains, after_probe_offsets);
+ 
+     // Lamp off (0x03=0x20); the dark strip starts 0.34 s later.
+     gl128_lamp_off(dev);
+     std::this_thread::sleep_for(std::chrono::milliseconds(340));
+-    apply_fe(strip_gains, t.dark_offsets);
++    apply_fe(strip_gains, dark_offsets);
+     auto dark_raw = gl128_acquire_shading_strip(dev, w, false);
+     auto dark = gl128_average_columns_chunky(dark_raw, w.pixels, GL128_SHADING_LINES);
+     auto dark_flat = gl128_parity_dark(dark);
+@@ -1177,12 +1379,11 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+     // until lit and steady (< 2%), at most 10 s. The unity table is uploaded
+     // afterwards, since strip data lands in the same AHB RAM.
+     gl128_lamp_on(dev);
+-    apply_fe(strip_gains, t.white_offsets);
++    apply_fe(strip_gains, white_offsets);
+     {
+         double prev = 0.0;
+         for (int i = 0; i < 20; i++) {
+-            auto strip = gl128_acquire_afe_strip(dev, sensor, false);
+-            auto m = gl128_channel_means_u16(strip, gl128_afe_strip_pixels(dev, false), true);
++            auto m = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, false), narrow_px);
+             double peak = std::max({ m[0], m[1], m[2] });
+             DBG(DBG_info, "GL128 relight %d: peak=%.0f\n", i, peak);
+             if (peak > 30000.0 && prev > 0.0 && std::abs(peak - prev) < 0.02 * peak) {
+@@ -1194,7 +1395,7 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+         gl128_reset_stationary_scan_engine(dev, "post relight");
+     }
+     dev->interface->write_ahb(GL128_AHB_SHADING, unity.size(), unity.data());
+-    apply_fe(strip_gains, t.white_offsets);
++    apply_fe(strip_gains, white_offsets);
+     gl128_upload_image_tables(dev, w.asic_dpi);
+     auto white_raw = gl128_acquire_shading_strip(dev, w, true);
+     auto white = gl128_average_columns_chunky(white_raw, w.pixels, GL128_SHADING_LINES);
+@@ -1226,13 +1427,9 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+     auto measured = gl128_pack_shading_table(dark_flat, gains, declared);
+     dev->interface->write_ahb(GL128_AHB_SHADING, measured.size(), measured.data());
+     dev->interface->write_register(REG_0x02, 0x00);
+-    // Image gains: the strip gains plus the device's image gain delta
+-    // (SilverFast raises its gains a few codes after its white strip).
+-    std::array<int, 3> image_gains;
+-    for (int c = 0; c < 3; c++) {
+-        image_gains[c] = std::min(0x3f, strip_gains[c] + t.image_gain_delta[c]);
+-    }
+-    apply_fe(image_gains, t.white_offsets);
++    // Image front end: the searched codes, or the fixed ones with the image
++    // gain delta SilverFast writes after its white strip.
++    apply_fe(image_gains, white_offsets);
+ 
+     // Depth registers back to 8-bit before the feeds (SilverFast writes 0x33
+     // twice, 0x17 then 0x1f).
+diff --git a/backend/genesys/gl128.h b/backend/genesys/gl128.h
+index 6a4d6a1..098a7cd 100644
+--- a/backend/genesys/gl128.h
++++ b/backend/genesys/gl128.h
+@@ -33,6 +33,10 @@
+ #include "genesys.h"
+ #include "command_set_common.h"
+ 
++#include <array>
++#include <cstdint>
++#include <vector>
++
+ namespace genesys {
+ namespace gl128 {
+ 
+@@ -109,6 +113,42 @@ unsigned gl128_asic_dpi(const Genesys_Sensor& sensor);
+ // the host averages factor x factor blocks.
+ unsigned gl128_host_downsample(const Genesys_Sensor& sensor, unsigned xres);
+ 
++// --- Front-end (AFE) search -------------------------------------------------
++// Per-device values for measuring the AFE before each scan (see gl128.cpp).
++struct Gl128AfeSearch {
++    SensorId sensor_id;
++    unsigned black_first;               // shielded (optical black) strip columns, first..end-1
++    unsigned black_end;
++    double pre_black;                   // optical black at gain 0, for the gain strip
++    double black;                       // optical black for the dark strip
++    double image_pedestal;              // the image's black this much above the dark strip's
++    std::array<double, 3> white_targets;  // lamp-on strip targets of the gain step, R, G, B
++    double min_lit;                     // a channel below this at gain 0: lamp not lit
++    double settle;                      // warm-up: re-read until no channel moves more than this
++    unsigned max_settle_reads;
++};
++// The search values for a sensor, or nullptr: the device keeps its fixed codes.
++const Gl128AfeSearch* gl128_afe_search_for(SensorId sensor_id);
++
++// AFE offsets (0x05-0x07) are 9-bit sign-magnitude: bit 8 set means negative.
++int gl128_decode_afe_offset(unsigned code);
++unsigned gl128_encode_afe_offset(int value);
++// Offset code that puts a probe at `target`, from probes read at two offset codes with the same
++// gain; false when the probe barely moved (fewer than 4 counts per offset code).
++bool gl128_offset_for_black(double at_low, double at_high, int low_code, int high_code,
++                            double target, int* offset);
++// PGA gain code (0-63) from the mean of the lamp-on strip read at gain 0. The AD9826 PGA gives
++// gain(code) = 75.6 / (75.6 - code), so this is the code whose gain brings `mean` to `target`.
++int gl128_gain_for_wide_mean(double mean, double target);
++// Per-channel means of a 16-bit RGB strip as the AFE strips return it, interleaved (RGBRGB):
++// of all `pixels`, or of columns first..end-1.
++std::array<double, 3> gl128_chunky_means(const std::vector<std::uint8_t>& strip, unsigned pixels);
++std::array<double, 3> gl128_chunky_means(const std::vector<std::uint8_t>& strip, unsigned pixels,
++                                         unsigned first, unsigned end);
++// True when every channel of `current` is within `tolerance` (a fraction) of `previous`.
++bool gl128_strip_settled(const std::array<double, 3>& previous, const std::array<double, 3>& current,
++                         double tolerance);
++
+ } // namespace gl128
+ } // namespace genesys
+ 
+diff --git a/testsuite/backend/genesys/tests_gl128.cpp b/testsuite/backend/genesys/tests_gl128.cpp
+index 7fa0fbc..a7ee231 100644
+--- a/testsuite/backend/genesys/tests_gl128.cpp
++++ b/testsuite/backend/genesys/tests_gl128.cpp
+@@ -31,6 +31,8 @@
+ 
+ #include <array>
+ #include <cmath>
++#include <cstdlib>
++#include <vector>
+ 
+ namespace genesys {
+ 
+@@ -335,6 +337,99 @@ void test_gl128_frontend_layout()
+     ASSERT_EQ(copy.regs.get_value(0x07), 29);
+ }
+ 
++// Front-end search arithmetic, against the SilverFast capture values published by the
++// pyopticfilm project (measurements; the codes SilverFast wrote for them).
++void test_gl128_afe_offset_codes()
++{
++    ASSERT_EQ(gl128::gl128_decode_afe_offset(0x16a), -106);
++    ASSERT_EQ(gl128::gl128_decode_afe_offset(0x142), -66);
++    ASSERT_EQ(gl128::gl128_decode_afe_offset(0x100), 0);
++    ASSERT_EQ(gl128::gl128_decode_afe_offset(0x45), 69);
++    ASSERT_EQ(gl128::gl128_encode_afe_offset(300), 0xffu);
++    ASSERT_EQ(gl128::gl128_encode_afe_offset(-300), 0x1ffu);
++    ASSERT_EQ(gl128::gl128_encode_afe_offset(-97), 0x161u);
++    ASSERT_EQ(gl128::gl128_encode_afe_offset(15), 15u);
++}
++
++void test_gl128_afe_offset_search()
++{
++    // Probes at gains 35/25/32 (one SilverFast session): optical black at 0x500 takes its codes
++    // 15/23/19 exactly.
++    const double lo[3] = { 5426, 4388, 5023 }, hi[3] = { 10100, 8145, 9366 };
++    const int expected[3] = { 15, 23, 19 };
++    for (int c = 0; c < 3; c++) {
++        int off = 0, image = 0;
++        ASSERT_TRUE(gl128::gl128_offset_for_black(lo[c], hi[c], 0x80, 0xff, 1280.0, &off));
++        ASSERT_EQ(off, expected[c]);
++        // 230 counts higher is 6-8 codes at these gains, as SilverFast settles its image offsets.
++        ASSERT_TRUE(gl128::gl128_offset_for_black(lo[c], hi[c], 0x80, 0xff, 1510.0, &image));
++        ASSERT_TRUE(image - off >= 6 && image - off <= 8);
++    }
++    // Gain 0: within 3 codes of the session's -95/-82/-81.
++    const double plo[3] = { 3526, 3380, 3425 }, phi[3] = { 5491, 5427, 5482 };
++    const int sf[3] = { -95, -82, -81 };
++    for (int c = 0; c < 3; c++) {
++        int off = 0;
++        ASSERT_TRUE(gl128::gl128_offset_for_black(plo[c], phi[c], 0x80, 0xff, 48.0, &off));
++        ASSERT_TRUE(std::abs(off - sf[c]) <= 3);
++    }
++    // A probe that barely moves (or is railed) gives no answer.
++    int off = 0;
++    ASSERT_FALSE(gl128::gl128_offset_for_black(3000, 3001, 0x80, 0xff, 1280.0, &off));
++    ASSERT_FALSE(gl128::gl128_offset_for_black(65535, 65535, 0x80, 0xff, 1280.0, &off));
++}
++
++void test_gl128_afe_gain_search()
++{
++    // Settled gain strips with the targets in the search table, and strips read straight after
++    // idle with SilverFast's own targets: both give that session's gains 35/25/32.
++    const auto* sp = gl128::gl128_afe_search_for(SensorId::CCD_PLUSTEK_OPTICFILM_8200I_SE);
++    ASSERT_TRUE(sp != nullptr);
++    const double settled[3] = { 26821, 36750, 32191 };
++    const double idle[3] = { 24953, 35464, 30563 }, sf[3] = { 47000, 53575, 53575 };
++    const int expected[3] = { 35, 25, 32 };
++    for (int c = 0; c < 3; c++) {
++        ASSERT_EQ(gl128::gl128_gain_for_wide_mean(settled[c], sp->white_targets[c]), expected[c]);
++        ASSERT_EQ(gl128::gl128_gain_for_wide_mean(idle[c], sf[c]), expected[c]);
++    }
++    ASSERT_EQ(gl128::gl128_gain_for_wide_mean(0, 50000), 63);         // clamped
++    ASSERT_EQ(gl128::gl128_gain_for_wide_mean(65535, 50000), 0);
++    ASSERT_TRUE(gl128::gl128_afe_search_for(SensorId::UNKNOWN) == nullptr);
++}
++
++void test_gl128_afe_strip_means()
++{
++    // Interleaved RGB, 16-bit LE: the optical-black columns are averaged on their own.
++    const unsigned px = 512;
++    std::vector<std::uint8_t> strip(px * 6, 0);
++    auto put = [&](unsigned x, int c, unsigned v) {
++        strip[x * 6 + c * 2] = static_cast<std::uint8_t>(v & 0xff);
++        strip[x * 6 + c * 2 + 1] = static_cast<std::uint8_t>(v >> 8);
++    };
++    for (unsigned x = 0; x < px; x++) {
++        bool black = x >= 2 && x < 56;
++        put(x, 0, black ? 1000 : 40000);
++        put(x, 1, black ? 2000 : 41000);
++        put(x, 2, black ? 3000 : 42000);
++    }
++    auto ob = gl128::gl128_chunky_means(strip, px, 2, 56);
++    ASSERT_EQ(ob[0], 1000.0);
++    ASSERT_EQ(ob[1], 2000.0);
++    ASSERT_EQ(ob[2], 3000.0);
++    auto all = gl128::gl128_chunky_means(strip, px);
++    ASSERT_TRUE(all[0] > 30000.0 && all[1] > all[0] && all[2] > all[1]);
++    ASSERT_RAISES(gl128::gl128_chunky_means(strip, px, 0, px + 1), SaneException);
++}
++
++void test_gl128_afe_warmup_settle()
++{
++    const std::array<double, 3> a = { 30000.0, 40000.0, 35000.0 };
++    ASSERT_TRUE(gl128::gl128_strip_settled(a, { 30050.0, 39950.0, 35060.0 }, 0.002));   // < 0.2%
++    ASSERT_FALSE(gl128::gl128_strip_settled(a, { 30000.0, 40200.0, 35000.0 }, 0.002));  // green 0.5%
++    ASSERT_FALSE(gl128::gl128_strip_settled({ 0.0, 0.0, 0.0 }, { 500.0, 0.0, 0.0 }, 0.002));
++    ASSERT_TRUE(gl128::gl128_strip_settled(a, a, 0.0));
++}
++
+ void test_gl128()
+ {
+     genesys_init_usb_device_tables();
+@@ -351,6 +446,11 @@ void test_gl128()
+     test_gl128_boot_does_not_cache_fe_bridge();
+     test_gl128_afe_survives_register_flush();
+     test_gl128_frontend_layout();
++    test_gl128_afe_offset_codes();
++    test_gl128_afe_offset_search();
++    test_gl128_afe_gain_search();
++    test_gl128_afe_strip_means();
++    test_gl128_afe_warmup_settle();
+ }
+ 
+ } // namespace genesys

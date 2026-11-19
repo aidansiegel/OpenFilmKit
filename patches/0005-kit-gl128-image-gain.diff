@@ -1,0 +1,144 @@
+diff --git a/backend/genesys/gl128.cpp b/backend/genesys/gl128.cpp
+index 1d45756..8861365 100644
+--- a/backend/genesys/gl128.cpp
++++ b/backend/genesys/gl128.cpp
+@@ -916,6 +916,21 @@ std::array<double, 3> gl128_chunky_means(const std::vector<std::uint8_t>& strip,
+     return gl128_chunky_means(strip, pixels, 0, pixels);
+ }
+ 
++int gl128_gain_code_for_factor(int code, double factor, double* actual)
++{
++    code = std::max(0, std::min(0x3f, code));
++    int out = code;
++    if (factor > 1.0) {
++        // gain(c') <= factor * gain(c)  <=>  75.6 - c' >= (75.6 - c) / factor
++        out = static_cast<int>(std::floor(75.6 - (75.6 - code) / factor + 1e-9));
++        out = std::max(code, std::min(0x3f, out));
++    }
++    if (actual) {
++        *actual = (75.6 - code) / (75.6 - out);
++    }
++    return out;
++}
++
+ bool gl128_strip_settled(const std::array<double, 3>& previous, const std::array<double, 3>& current,
+                          double tolerance)
+ {
+@@ -1466,6 +1481,66 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+                 c, lo, sum / std::max(1u, w.pixels), hi, at_ceiling, w.pixels);
+         }
+     }
++    // OpenFilmKit experiment (not for upstream): OPENFILMKIT_GL128_IMAGE_GAIN="r,g,b" raises each
++    // channel's analog gain for the image pass by up to that factor over the white strip's. A
++    // negative's film base sits far below the lamp's white in green and blue (the orange mask),
++    // so most of their range goes unused; the kit picks the factors from a film base scan. The
++    // lamp's own white, which film never reaches, then goes past full scale. Black is probed
++    // again at the new gains. AFE strips land in the same AHB RAM as the tables, so this runs
++    // before the shading upload, and the image tables go up again afterwards.
++    if (const char* ge = std::getenv("OPENFILMKIT_GL128_IMAGE_GAIN")) {
++        std::vector<double> k;
++        {
++            std::istringstream in(ge);
++            in.imbue(std::locale::classic());
++            double v = 0;
++            char sep = 0;
++            while (in >> v) {
++                k.push_back(v);
++                if (!(in >> sep) || sep != ',') {
++                    break;
++                }
++            }
++        }
++        const Gl128AfeSearch* sp = gl128_afe_search_for(dev->model->sensor_id);
++        if (k.size() == 3 && sp && k[0] >= 1.0 && k[1] >= 1.0 && k[2] >= 1.0 &&
++            k[0] <= 8.0 && k[1] <= 8.0 && k[2] <= 8.0)
++        {
++            std::array<int, 3> boosted;
++            double actual[3];
++            for (int c = 0; c < 3; c++) {
++                boosted[c] = gl128_gain_code_for_factor(image_gains[c], k[c], &actual[c]);
++            }
++            apply_fe(boosted, offset_codes(0x80, 0x80, 0x80));
++            auto lo = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, false), narrow_px,
++                                         sp->black_first, sp->black_end);
++            apply_fe(boosted, offset_codes(0xff, 0xff, 0xff));
++            auto hi = gl128_chunky_means(gl128_acquire_afe_strip(dev, sensor, false), narrow_px,
++                                         sp->black_first, sp->black_end);
++            bool ok = true;
++            std::array<int, 3> offs;
++            for (int c = 0; c < 3; c++) {
++                ok = ok && gl128_offset_for_black(lo[c], hi[c], 0x80, 0xff,
++                                                  sp->black + sp->image_pedestal, &offs[c]);
++            }
++            gl128_reset_stationary_scan_engine(dev, "post image-gain probes");
++            gl128_upload_image_tables(dev, w.asic_dpi);
++            if (ok) {
++                image_gains = boosted;
++                white_offsets = offset_codes(offs[0], offs[1], offs[2]);
++                DBG(DBG_info, "GL128 image gain: asked (%.2f,%.2f,%.2f), got (%.2f,%.2f,%.2f): gains "
++                    "(%d,%d,%d), offsets (%d,%d,%d)\n", k[0], k[1], k[2], actual[0], actual[1],
++                    actual[2], boosted[0], boosted[1], boosted[2], offs[0], offs[1], offs[2]);
++            } else {
++                DBG(DBG_warn, "GL128 image gain: optical black barely moved at the new gains; "
++                    "keeping the white strip's codes\n");
++            }
++        } else {
++            DBG(DBG_warn, "GL128 image gain: ignoring OPENFILMKIT_GL128_IMAGE_GAIN=%s "
++                "(want three factors from 1 to 8)\n", ge);
++        }
++    }
++
+     auto measured = gl128_pack_shading_table(dark_flat, gains, declared);
+     dev->interface->write_ahb(GL128_AHB_SHADING, measured.size(), measured.data());
+     dev->interface->write_register(REG_0x02, 0x00);
+diff --git a/backend/genesys/gl128.h b/backend/genesys/gl128.h
+index 098a7cd..e362667 100644
+--- a/backend/genesys/gl128.h
++++ b/backend/genesys/gl128.h
+@@ -145,6 +145,9 @@ int gl128_gain_for_wide_mean(double mean, double target);
+ std::array<double, 3> gl128_chunky_means(const std::vector<std::uint8_t>& strip, unsigned pixels);
+ std::array<double, 3> gl128_chunky_means(const std::vector<std::uint8_t>& strip, unsigned pixels,
+                                          unsigned first, unsigned end);
++// The largest PGA code whose gain is at most `factor` times gain(code); `actual` gets the factor
++// that code gives.
++int gl128_gain_code_for_factor(int code, double factor, double* actual);
+ // True when every channel of `current` is within `tolerance` (a fraction) of `previous`.
+ bool gl128_strip_settled(const std::array<double, 3>& previous, const std::array<double, 3>& current,
+                          double tolerance);
+diff --git a/testsuite/backend/genesys/tests_gl128.cpp b/testsuite/backend/genesys/tests_gl128.cpp
+index a7ee231..851da6d 100644
+--- a/testsuite/backend/genesys/tests_gl128.cpp
++++ b/testsuite/backend/genesys/tests_gl128.cpp
+@@ -430,6 +430,24 @@ void test_gl128_afe_warmup_settle()
+     ASSERT_TRUE(gl128::gl128_strip_settled(a, a, 0.0));
+ }
+ 
++void test_gl128_image_gain_codes()
++{
++    double actual = 0;
++    ASSERT_EQ(gl128::gl128_gain_code_for_factor(26, 1.0, &actual), 26);
++    ASSERT_EQ(actual, 1.0);
++    // gain(12) = 75.6/63.6 = 1.189; x2 -> at most 2.377 -> code 43 (2.319x gain, 1.95x factor).
++    ASSERT_EQ(gl128::gl128_gain_code_for_factor(12, 2.0, &actual), 43);
++    ASSERT_TRUE(actual <= 2.0 && actual > 1.9);
++    for (int c = 0; c <= 63; c += 7) {
++        for (double k : { 1.1, 1.5, 3.0, 8.0 }) {
++            int out = gl128::gl128_gain_code_for_factor(c, k, &actual);
++            ASSERT_TRUE(out >= c && out <= 63);
++            ASSERT_TRUE(actual <= k + 1e-9);
++        }
++    }
++    ASSERT_EQ(gl128::gl128_gain_code_for_factor(26, 8.0, &actual), 63);
++}
++
+ void test_gl128()
+ {
+     genesys_init_usb_device_tables();
+@@ -451,6 +469,7 @@ void test_gl128()
+     test_gl128_afe_gain_search();
+     test_gl128_afe_strip_means();
+     test_gl128_afe_warmup_settle();
++    test_gl128_image_gain_codes();
+ }
+ 
+ } // namespace genesys

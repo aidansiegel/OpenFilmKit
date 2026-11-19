@@ -1,0 +1,204 @@
+diff --git a/backend/genesys/gl128.cpp b/backend/genesys/gl128.cpp
+index 8b6a1cb..01aa1b0 100644
+--- a/backend/genesys/gl128.cpp
++++ b/backend/genesys/gl128.cpp
+@@ -82,10 +82,10 @@ struct Gl128DarkClocks {
+     Gl128PassClocks clocks;
+ };
+ 
+-// Front-end offsets and gains (R, G, B).
++// Front-end PGA gains (AFE 0x02-0x04) and offsets (0x05-0x07), R, G, B.
+ struct Gl128FrontendCodes {
+-    std::array<int, 3> offsets;
+     std::array<int, 3> gains;
++    std::array<int, 3> offsets;
+ };
+ 
+ struct Gl128DeviceTables {
+@@ -112,13 +112,13 @@ struct Gl128DeviceTables {
+     unsigned channel_first_override;
+ 
+     // Front-end codes, in the order the calibration uses them.
+-    std::array<int, 3> shading_offsets;         // dark, white and lamp strips
+-    std::array<int, 3> lamp_gains;              // lamp warm-up, relight, white strip
++    std::array<int, 3> strip_gains;             // PGA gains: dark, lamp and white strips
++    std::array<int, 3> white_offsets;           // offsets: lamp warm-up, relight, white strip, image
+     std::vector<Gl128FrontendCodes> probes;     // AFE probes, lamp on
+     unsigned wide_probe_index;                  // the probe read over the full width
+-    std::array<int, 3> after_probe_gains;       // with shading_offsets
+-    std::array<int, 3> dark_gains;              // with shading_offsets
+-    std::array<int, 3> image_offset_delta;      // image offsets = shading + this
++    std::array<int, 3> after_probe_offsets;     // with strip_gains
++    std::array<int, 3> dark_offsets;            // with strip_gains
++    std::array<int, 3> image_gain_delta;        // image gains = strip_gains + this
+ 
+     // Line timing overrides.
+     std::vector<Gl128DarkClocks> dark_clocks;
+@@ -1078,15 +1078,15 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+     const unsigned declared = gl128_declared_shading_size(w.pixels);
+ 
+     // Sequence, order and front-end codes as in SilverFast's 1800 dpi capture.
+-    auto apply_fe = [&](std::array<int, 3> offs, std::array<int, 3> gains) {
++    auto apply_fe = [&](std::array<int, 3> gains, std::array<int, 3> offsets) {
+         for (int c = 0; c < 3; c++) {
+-            dev->frontend.set_offset(c, static_cast<std::uint16_t>(offs[c]));
+             dev->frontend.set_gain(c, static_cast<std::uint16_t>(gains[c]));
++            dev->frontend.set_offset(c, static_cast<std::uint16_t>(offsets[c]));
+         }
+         dev->cmd_set->set_fe(dev, sensor, AFE_SET);
+     };
+     const auto& t = gl128_device_tables(dev);
+-    const std::array<int, 3>& level_offs = t.shading_offsets;
++    const std::array<int, 3>& strip_gains = t.strip_gains;
+ 
+     // Cold start: the lamp needs to warm up, or the white strip (62 ms after
+     // switching on, as SilverFast) reads 0. Read stationary lamp-on strips
+@@ -1094,7 +1094,7 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+     // readings (at least 5 s, at most 60 s).
+     if (dev->lamp_warmup_pending) {
+         gl128_lamp_on(dev);
+-        apply_fe(level_offs, t.lamp_gains);
++        apply_fe(strip_gains, t.white_offsets);
+         double prev = 0.0;
+         int stable = 0;
+         for (int i = 0; i < 60; i++) {
+@@ -1139,24 +1139,24 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+     // for the first two) when the clock set-up is right.
+     for (std::size_t i = 0; i < t.probes.size(); i++) {
+         const auto& p = t.probes[i];
+-        apply_fe(p.offsets, p.gains);
++        apply_fe(p.gains, p.offsets);
+         if (i == t.wide_probe_index) {
+             gl128_acquire_afe_strip(dev, sensor, true);
+             continue;
+         }
+         auto strip = gl128_acquire_afe_strip(dev, sensor, false);
+         auto m = gl128_channel_means_u16(strip, gl128_afe_strip_pixels(dev, false), true);
+-        DBG(DBG_info, "GL128 AFE probe offsets (%d,%d,%d) gains (%d,%d,%d): "
++        DBG(DBG_info, "GL128 AFE probe gains (%d,%d,%d) offsets (%d,%d,%d): "
+             "means=(%.0f,%.0f,%.0f)\n",
+-            p.offsets[0], p.offsets[1], p.offsets[2], p.gains[0], p.gains[1], p.gains[2],
++            p.gains[0], p.gains[1], p.gains[2], p.offsets[0], p.offsets[1], p.offsets[2],
+             m[0], m[1], m[2]);
+     }
+-    apply_fe(level_offs, t.after_probe_gains);
++    apply_fe(strip_gains, t.after_probe_offsets);
+ 
+     // Lamp off (0x03=0x20); the dark strip starts 0.34 s later.
+     gl128_lamp_off(dev);
+     std::this_thread::sleep_for(std::chrono::milliseconds(340));
+-    apply_fe(level_offs, t.dark_gains);
++    apply_fe(strip_gains, t.dark_offsets);
+     auto dark_raw = gl128_acquire_shading_strip(dev, w, false);
+     auto dark = gl128_average_columns_chunky(dark_raw, w.pixels, GL128_SHADING_LINES);
+     auto dark_flat = gl128_parity_dark(dark);
+@@ -1177,7 +1177,7 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+     // until lit and steady (< 2%), at most 10 s. The unity table is uploaded
+     // afterwards, since strip data lands in the same AHB RAM.
+     gl128_lamp_on(dev);
+-    apply_fe(level_offs, t.lamp_gains);
++    apply_fe(strip_gains, t.white_offsets);
+     {
+         double prev = 0.0;
+         for (int i = 0; i < 20; i++) {
+@@ -1194,8 +1194,7 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+         gl128_reset_stationary_scan_engine(dev, "post relight");
+     }
+     dev->interface->write_ahb(GL128_AHB_SHADING, unity.size(), unity.data());
+-    const std::array<int, 3>& white_gains = t.lamp_gains;
+-    apply_fe(level_offs, white_gains);
++    apply_fe(strip_gains, t.white_offsets);
+     gl128_upload_image_tables(dev, w.asic_dpi);
+     auto white_raw = gl128_acquire_shading_strip(dev, w, true);
+     auto white = gl128_average_columns_chunky(white_raw, w.pixels, GL128_SHADING_LINES);
+@@ -1227,12 +1226,13 @@ void gl128_run_asic_shading(Genesys_Device* dev, const Genesys_Sensor& sensor,
+     auto measured = gl128_pack_shading_table(dark_flat, gains, declared);
+     dev->interface->write_ahb(GL128_AHB_SHADING, measured.size(), measured.data());
+     dev->interface->write_register(REG_0x02, 0x00);
+-    // Image offsets: the shading offsets plus the device's image offset delta.
+-    std::array<int, 3> image_offs;
++    // Image gains: the strip gains plus the device's image gain delta
++    // (SilverFast raises its gains a few codes after its white strip).
++    std::array<int, 3> image_gains;
+     for (int c = 0; c < 3; c++) {
+-        image_offs[c] = std::min(255, level_offs[c] + t.image_offset_delta[c]);
++        image_gains[c] = std::min(0x3f, strip_gains[c] + t.image_gain_delta[c]);
+     }
+-    apply_fe(image_offs, white_gains);
++    apply_fe(image_gains, t.white_offsets);
+ 
+     // Depth registers back to 8-bit before the feeds (SilverFast writes 0x33
+     // twice, 0x17 then 0x1f).
+diff --git a/backend/genesys/tables_frontend.cpp b/backend/genesys/tables_frontend.cpp
+index 80aea93..ab53895 100644
+--- a/backend/genesys/tables_frontend.cpp
++++ b/backend/genesys/tables_frontend.cpp
+@@ -562,13 +562,14 @@ void genesys_init_frontend_tables()
+     s_frontends->push_back(fe);
+     fe = Genesys_Frontend();
+     fe.id = AdcId::PLUSTEK_OPTICFILM_8200I_SE;
+-    // Boot values (pyopticfilm FRONTEND_REGS); offsets 0x02-0x04 and gains
+-    // 0x05-0x07 are set by gl128.cpp before every image pass.
++    // Boot values. On this Analog Devices AFE, 0x02-0x04 are the 6-bit PGA
++    // gains and 0x05-0x07 the 9-bit sign-magnitude offsets (R, G, B);
++    // gl128.cpp sets them before every image pass.
+     {
+         GenesysFrontendLayout gl128_fe_layout;
+         gl128_fe_layout.type = FrontendType::ANALOG_DEVICES;
+-        gl128_fe_layout.offset_addr = { 0x02, 0x03, 0x04 };
+-        gl128_fe_layout.gain_addr = { 0x05, 0x06, 0x07 };
++        gl128_fe_layout.offset_addr = { 0x05, 0x06, 0x07 };
++        gl128_fe_layout.gain_addr = { 0x02, 0x03, 0x04 };
+         fe.layout = gl128_fe_layout;
+     }
+     fe.regs = {
+diff --git a/testsuite/backend/genesys/tests_gl128.cpp b/testsuite/backend/genesys/tests_gl128.cpp
+index 0855b67..7fa0fbc 100644
+--- a/testsuite/backend/genesys/tests_gl128.cpp
++++ b/testsuite/backend/genesys/tests_gl128.cpp
+@@ -310,11 +310,37 @@ void test_gl128_afe_survives_register_flush()
+     }
+ }
+ 
++// On this AFE the PGA gains are 0x02-0x04 and the offsets 0x05-0x07.
++void test_gl128_frontend_layout()
++{
++    const Genesys_Frontend* fe = nullptr;
++    for (const auto& f : *s_frontends) {
++        if (f.id == AdcId::PLUSTEK_OPTICFILM_8200I_SE) {
++            fe = &f;
++        }
++    }
++    ASSERT_TRUE(fe != nullptr);
++    Genesys_Frontend copy = *fe;
++    copy.set_gain(0, 27);
++    copy.set_gain(1, 12);
++    copy.set_gain(2, 26);
++    copy.set_offset(0, 30);
++    copy.set_offset(1, 0x133);
++    copy.set_offset(2, 29);
++    ASSERT_EQ(copy.regs.get_value(0x02), 27);
++    ASSERT_EQ(copy.regs.get_value(0x03), 12);
++    ASSERT_EQ(copy.regs.get_value(0x04), 26);
++    ASSERT_EQ(copy.regs.get_value(0x05), 30);
++    ASSERT_EQ(copy.regs.get_value(0x06), 0x133);
++    ASSERT_EQ(copy.regs.get_value(0x07), 29);
++}
++
+ void test_gl128()
+ {
+     genesys_init_usb_device_tables();
+     genesys_init_sensor_tables();
+     genesys_init_motor_tables();
++    genesys_init_frontend_tables();
+ 
+     test_gl128_model();
+     test_gl128_session_width();
+@@ -324,6 +350,7 @@ void test_gl128()
+     test_gl128_session_gray();
+     test_gl128_boot_does_not_cache_fe_bridge();
+     test_gl128_afe_survives_register_flush();
++    test_gl128_frontend_layout();
+ }
+ 
+ } // namespace genesys

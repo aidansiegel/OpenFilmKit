@@ -1,4 +1,8 @@
 # Applied in order on top of the pinned SANE commit (packaging/sane-pin.json).
 # Remove a line and its file once upstream has the change.
 0001-gl128-afe-port-replay.diff
-0002-gl128-afe-search.diff
+0002-gl128-frontend-register-names.diff
+0003-gl128-afe-search.diff
+# OpenFilmKit only, not for upstream: test switches, and an experimental image gain boost.
+0004-kit-gl128-test-switches.diff
+0005-kit-gl128-image-gain.diff
