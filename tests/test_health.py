@@ -104,7 +104,9 @@ class Shrink(unittest.TestCase):
         self.assertEqual(small.shape, (3, 2, 3))
         self.assertEqual(small[0, 0, 0], np.rint(a[:3, :3, 0].mean()))
         self.assertEqual(small[2, 1, 2], np.rint(a[6:, 3:, 2].mean()))       # a 1 x 2 block
-        self.assertIs(conversion.shrink(a, 1), a)
+        same = conversion.shrink(a, 1)                                       # nothing to average: a copy, never
+        self.assertIsNot(same, a)                                            # `a`, which may be a scan's file
+        np.testing.assert_array_equal(same, a)                               # mapped (see test_gui_service.OpenFiles)
 
     def test_a_speck_between_kept_pixels_still_shows(self):
         a = np.full((60, 60, 3), 30000, np.uint16)
