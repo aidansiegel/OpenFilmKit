@@ -14,6 +14,9 @@ HOST is a name ssh knows (from ~/.ssh/config, say). Settings for a host can go i
     openfilmkit = "/home/linuxbrew/.linuxbrew/bin/openfilmkit"   # default: openfilmkit
     jobs = "openfilmkit-jobs"                                # job folder, from the home folder
 
+`openfilmkit` and `ssh_command` (what to run in place of ssh) are command lines, split as a shell
+would: put a path with spaces in single quotes, as in ssh_command = "ssh -i '/Volumes/Key Disk/id_pi'".
+
 The host needs the same OpenFilmKit version (jobs run only on the version that packed them),
 rsync and an SSH login that doesn't ask for a password each time (a key).
 """

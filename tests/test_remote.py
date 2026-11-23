@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -35,12 +36,13 @@ sys.exit(subprocess.run(['sh', '-c', ' '.join(sys.argv[2:])], cwd=os.environ['FA
 class OnHost(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name).resolve()
+        self.root = Path(self.temp.name).resolve() / 'a folder with spaces'   # like /Volumes/External Disk
+        self.root.mkdir()
         self.home = self.root / 'pi-home'
         self.home.mkdir()
         (self.root / 'fake_ssh.py').write_text(FAKE_SSH)
         (self.root / 'config').mkdir()
-        self.write_hosts(f'{sys.executable} -m openfilmkit')
+        self.write_hosts(shlex.join([sys.executable, '-m', 'openfilmkit']))
         (self.root / 'photos').mkdir()
         rng = np.random.default_rng(3)
         img = np.clip(120 + rng.normal(0, 3, (300, 400, 3)), 0, 255).astype(np.uint8)
@@ -58,8 +60,10 @@ class OnHost(unittest.TestCase):
 
     def write_hosts(self, openfilmkit):
         (self.root / 'config' / 'hosts.toml').write_text(
-            f'[hosts.pi]\nssh_command = "{sys.executable} {self.root / "fake_ssh.py"}"\n'
-            f'openfilmkit = "{openfilmkit}"\njobs = "~/ofk-jobs"\n')
+            # each setting a command line, its paths quoted as a person would for a shell, then put in a TOML
+            # string: json.dumps writes one TOML reads back as it was
+            f'[hosts.pi]\nssh_command = {json.dumps(shlex.join([sys.executable, str(self.root / "fake_ssh.py")]))}\n'
+            f'openfilmkit = {json.dumps(openfilmkit)}\njobs = "~/ofk-jobs"\n')
 
     def ofk(self, *argv):
         out = io.StringIO()
