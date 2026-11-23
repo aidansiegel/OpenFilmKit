@@ -64,7 +64,7 @@ class Saturation(unittest.TestCase):
             tifffile.imwrite(root / 'raw.tif', np.clip(np.rint(a), 0, 65535).astype(np.uint16), photometric='rgb')
             args = argparse.Namespace(source=str(root / 'raw.tif'), output=str(root / 'v.png'), stock='kirkland-200',
                                       roll=None, profile='agfa-hdc200', crop=None, levels_from=None, max_side=0,
-                                      contrast=1.3, gamma=1., warmth=0., saturation=1.4)
+                                      contrast=1.3, gamma=1., warmth=0., saturation=1.4, auto=False)
             record = conversion.convert(args)
             self.assertEqual(record['saturation'], 1.4)
             self.assertEqual(json.loads(Path(str(root / 'v.png') + '.json').read_text())['saturation'], 1.4)
@@ -84,7 +84,7 @@ class Saturation(unittest.TestCase):
             args = argparse.Namespace(source=str(root / 'raw.tif'), output=str(root / 'v.tif'), stock='kirkland-200',
                                       roll=None, profile='agfa-hdc200', crop=None, levels_from=None, max_side=0,
                                       contrast=1.0, gamma=1., warmth=0., saturation=1.0,
-                                      lut=str(root / 'keeper-lut.npy'), tiff=True)
+                                      lut=str(root / 'keeper-lut.npy'), tiff=True, auto=False)
             record = conversion.convert(args)
             self.assertEqual(record['lut_source']['path'], str((root / 'keeper-lut.npy').resolve()))
             out = tifffile.imread(root / 'v.tif')

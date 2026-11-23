@@ -119,7 +119,7 @@ class Shrink(unittest.TestCase):
             tifffile.imwrite(root / 'raw.tif', a, photometric='rgb')
             args = argparse.Namespace(source=str(root / 'raw.tif'), output=str(root / 'view.png'), stock='kirkland-200',
                                       roll=None, profile='agfa-hdc200', crop=None, levels_from=None, max_side=60,
-                                      contrast=1.3, gamma=1., warmth=0.)
+                                      contrast=1.3, gamma=1., warmth=0., auto=False)
             record = conversion.convert(args)
             self.assertEqual((record['output_dimensions'], record['downscale']),
                              ([60, 40], {'method': 'block average', 'block': 6}))

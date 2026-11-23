@@ -10,11 +10,11 @@ kit's, and roll choices come from the roll folder's roll.json. Each conversion r
 hold (see health.py), so a clamped or stretched channel is reported, not silently converted.
 """
 from pathlib import Path
-import datetime,hashlib,json,math,os,struct,traceback
+import datetime,errno,hashlib,json,math,os,struct,threading,time,traceback
 import numpy as np
 import tifffile
 from PIL import Image,ImageCms
-from . import density as film_density, stocks as film_stocks
+from . import auto as film_auto, density as film_density, stocks as film_stocks
 from .. import files, health as scan_health, roll as rolls
 from ..pixels import tiff_page
 Image.MAX_IMAGE_PIXELS=None
@@ -58,6 +58,80 @@ def shrink(a,f):
     total=np.add.reduceat(np.add.reduceat(np.asarray(a,np.uint32),rows,axis=0),cols,axis=1)
     n=np.minimum(f,h-rows)[:,None]*np.minimum(f,w-cols)[None,:]
     return np.rint(total/n[:,:,None]).astype(np.uint16)
+
+def glance(raw,side=1800):
+    """A small copy of the whole scan for measuring, and the block size it was shrunk by. Done a band at a time:
+    shrinking a full 8200i SE scan in one go held about 850 MB of sums."""
+    look=max(1,math.ceil(max(raw.shape[:2])/side));band=look*64
+    return np.concatenate([shrink(raw[i:i+band],look) for i in range(0,raw.shape[0],band)]),look
+
+EMPTY=.9   # every channel's median above this share of full scale: no film in the holder, the light went straight through
+
+def looks_empty(pixels):
+    """True for a scan of no film (an empty holder slot, past the end of the strip): nothing to measure or turn."""
+    step=max(1,math.ceil(max(pixels.shape[:2])/600))
+    return bool(np.median(pixels[::step,::step,:3].reshape(-1,3),axis=0).min()>EMPTY*65535)
+
+ROLL_BALANCE='auto-balance.cache'   # JSON, but not named .json: the kit keeps NAME.json for the record of NAME
+
+_ROLL_LOCKS,_ROLL_DONE={},{}   # one measuring of a roll at a time; how far it has got: {roll: (done, total)}
+
+def _roll_lock(roll_dir):
+    return _ROLL_LOCKS.setdefault(str(roll_dir),threading.Lock())
+
+def roll_balance(roll_dir,chosen,model,measure=True,progress=None):
+    """The automatic balance of every master on a roll, {name: gains}, for auto.settle. Each is measured the way
+    convert measures its own (picture box, levels, curve, balance) on a small copy, and kept in the roll's
+    auto-balance.cache with the master's size and time and the film choice, so a roll is read through once and
+    then only when a frame is added or rescanned or the film choice changes. Frames that can't be read are skipped.
+    measure=False: only what's already kept, measuring nothing (the app's thumbnails, which can't wait a minute).
+    progress(done, total, seconds_left) is called as frames are measured (seconds_left None until 3 are done); one measuring of a roll runs at a time, and a second
+    caller waits for it (hearing its progress) and then finds the frames already kept."""
+    if measure:
+        lock=_roll_lock(Path(roll_dir).resolve())
+        while not lock.acquire(timeout=.5):
+            if progress:progress(*_ROLL_DONE.get(str(Path(roll_dir).resolve()),(0,0,None)))
+        try:return _roll_balance(roll_dir,chosen,model,True,progress)
+        finally:lock.release()
+    return _roll_balance(roll_dir,chosen,model,False,None)
+
+def _roll_balance(roll_dir,chosen,model,measure,progress):
+    roll_dir=Path(roll_dir);store=roll_dir/ROLL_BALANCE;key=f"{chosen['stock_id']}/{chosen['profile_id']}/2"   # /2: empty slots left out (measured again once)
+    try:known=json.loads(store.read_text()) if store.is_file() else {}
+    except ValueError:known={}
+    if not isinstance(known,dict):known={}
+    table,changed={},False
+    masters=[m for m in sorted((roll_dir/'masters').glob('*.tif')) if not m.name.startswith('.') and m.is_file()]
+    where=str(roll_dir.resolve());todo=[]
+    for master in masters:
+        st=master.stat();seen=known.get(master.name)
+        if isinstance(seen,dict) and seen.get('size')==st.st_size and seen.get('mtime_ns')==st.st_mtime_ns and seen.get('film')==key:
+            table[master.name]=seen['gains']
+        elif measure:todo.append((master,st))
+    started=time.monotonic()
+    for n,(master,st) in enumerate(todo):
+        # time left: the average so far, once 3 frames are done (the first reads are slow: the disk wakes up)
+        left=round((time.monotonic()-started)/n*(len(todo)-n)) if n>=3 else None
+        _ROLL_DONE[where]=(n,len(todo),left)
+        if progress:progress(n,len(todo),left)
+        try:
+            small,_=glance(raw_open(master))
+            if looks_empty(small):gains=None   # an empty slot says nothing about the roll's color; kept, so it isn't read again
+            else:
+                x0,y0,x1,y1=film_auto.picture_box(small);small=small[y0:y1,x0:x1]
+                gains=film_auto.measure(small,make_lut(model,*fit_levels(small)))['gains']
+        except (ValueError,OSError):continue
+        table[master.name]=None if gains is None else [round(float(g),5) for g in gains]
+        known[master.name]=dict(size=st.st_size,mtime_ns=st.st_mtime_ns,film=key,gains=table[master.name]);changed=True
+    _ROLL_DONE.pop(where,None)
+    if changed:
+        tmp=store.with_name(f'.{store.name}.{os.getpid()}.{threading.get_ident()}.tmp')   # the app measures from two threads
+        try:tmp.write_text(json.dumps(known,indent=1)+'\n');tmp.replace(store)
+        except OSError as e:
+            if e.errno==errno.ENOSPC:raise OSError(e.errno,e.strerror or os.strerror(e.errno),e.filename or str(tmp)) from e   # said, naming the place
+            # otherwise a roll on a read-only disk or share: measured again next time
+        finally:tmp.unlink(missing_ok=True)
+    return {n:g for n,g in table.items() if g is not None}
 
 def write_tiff(dest,pixels,icc):
     """A 16-bit (or 8-bit) RGB TIFF with the sRGB profile embedded, losslessly compressed (deflate with
@@ -147,13 +221,20 @@ def slide_lut(model,low,high):
     srgb=np.where(linear<=.0031308,12.92*linear,1.055*np.maximum(linear,0)**(1/2.4)-.055)
     table[:]=np.rint(np.clip(srgb,0,1)*65535).astype(np.uint16);return table
 
-def render(raw,lut,contrast=1.3,gamma=1.0,warmth=0.0,top=255,saturation=1.0):
+def render(raw,lut,contrast=1.3,gamma=1.0,warmth=0.0,top=255,saturation=1.0,gains=None,exposure=1.0,tone=None):
     """Viewing pixels from raw RGB16 through the LUT; top: 255 for 8-bit output, 65535 for 16-bit.
     saturation scales each pixel's color away from (above 1) or toward (below 1) its own gray, in
-    linear light at constant luminance, before the tone curve; 1 leaves the pixels as they were."""
+    linear light at constant luminance, before the tone curve; 1 leaves the pixels as they were.
+    gains (per channel) and exposure come from auto.measure(): the frame's color balance and brightness,
+    applied in linear light first. tone, also from auto.measure(), is the frame's own black point, pivot and
+    contrast; with it, highlights roll off toward white instead of clipping, and `contrast` scales the frame's
+    own (1.3 leaves it as measured), so the Contrast slider still works the same way."""
     if not (.1<=contrast<=4 and .1<=gamma<=4 and -1<=warmth<=1):raise ValueError('Contrast/gamma must be 0.1–4; warmth must be -1–1.')
     if not 0<=saturation<=3:raise ValueError('Saturation must be 0–3.')
     a=np.stack([lut[raw[:,:,c],c] for c in range(3)],2).astype(float)/65535
+    if gains is not None or exposure!=1 or tone:
+        lin=film_auto.decode(a)*(np.ones(3) if gains is None else np.asarray(gains,float))*exposure
+        a=film_auto.encode(film_auto.shoulder(lin) if tone else np.clip(lin,0,1))
     weights=np.array([.2126,.7152,.0722]);L=np.sum(a*weights,2,keepdims=True)
     if warmth:
         strength=np.clip((.98-L)/.18,0,1);a*=1+strength*(np.array([.08,0,-.12])*warmth)
@@ -161,7 +242,8 @@ def render(raw,lut,contrast=1.3,gamma=1.0,warmth=0.0,top=255,saturation=1.0):
     if saturation!=1:
         a=np.maximum(L+(a-L)*saturation,0)
         a*=L/np.maximum(np.sum(a*weights,2,keepdims=True),1e-10)   # back to the pixel's luminance
-    v=np.clip(L,0,1);up=v**contrast;down=(1-v)**contrast;target=(up/(up+down))**(1/gamma)
+    if tone:target=film_auto.curve(L,tone['black'],tone['pivot'],max(.3,tone['contrast']*contrast/1.3),tone.get('middle'))**(1/gamma)
+    else:v=np.clip(L,0,1);up=v**contrast;down=(1-v)**contrast;target=(up/(up+down))**(1/gamma)
     return np.rint(np.clip(a*target/np.maximum(L,1e-10),0,1)*top).astype(np.uint8 if top==255 else np.uint16)
 
 def capture_metadata(source):
@@ -197,18 +279,38 @@ def convert(args,root=film_stocks.DATA):
     saturation=getattr(args,'saturation',1.0)
     if saturation is None:saturation=1.0
     if not 0<=saturation<=3:raise ValueError('Saturation must be 0–3.')
+    rotate=getattr(args,'rotate',None)
+    if rotate is not None and int(rotate) not in (0,90,180,270):raise ValueError('Rotation must be 0, 90, 180 or 270 degrees clockwise.')
+    auto=getattr(args,'auto',True) is not False
+    dust=bool(getattr(args,'dust',False))
     digest=sha(source)
     if meta.get('sha256') and meta['sha256']!=digest:raise ValueError('Source TIFF does not match its capture checksum.')
-    raw=raw_open(source);h,w=raw.shape[:2];box=args.crop or [0,0,w,h];x0,y0,x1,y1=box
+    raw=raw_open(source);h,w=raw.shape[:2]
+    small_copy,look=glance(raw)   # a small copy of the whole scan, for measuring
+    if looks_empty(small_copy) and not args.levels_from:raise ValueError('this frame looks empty (no film in the holder), so there is no picture to save')
+    found=None
+    if args.crop:box=list(args.crop)
+    elif auto:
+        b=film_auto.picture_box(small_copy);found=[min(w,b[0]*look),min(h,b[1]*look),min(w,b[2]*look),min(h,b[3]*look)]
+        box=found if found!=[0,0,min(w,small_copy.shape[1]*look),min(h,small_copy.shape[0]*look)] else [0,0,w,h]
+    else:box=[0,0,w,h]
+    x0,y0,x1,y1=box
     if not (0<=x0<x1<=w and 0<=y0<y1<=h):raise ValueError('Crop lies outside the source TIFF.')
     area=raw[y0:y1,x0:x1];health=scan_health.check(area)
+    # Where color and levels are measured: the picture, unless the app's crop editor chose the box (a manual crop,
+    # or none), when they're measured on the automatic crop all the same: moving the box changes what's in the
+    # picture, not how it looks, and the saved picture matches the app's preview.
+    mx0,my0,mx1,my1=box
+    if auto and getattr(args,'crop_source',None) in ('manual','none'):
+        b=film_auto.picture_box(small_copy);mx0,my0,mx1,my1=[min(w,b[0]*look),min(h,b[1]*look),min(w,b[2]*look),min(h,b[3]*look)]
+    measured=area if (mx0,my0,mx1,my1)==tuple(box) else raw[my0:my1,mx0:mx1]
     if args.levels_from:
         prior_path=Path(args.levels_from).expanduser().resolve();prior=named_file(prior_path,'--levels-from',('film_selection','transmission_low_rgb','transmission_high_rgb'));selected=prior['film_selection'] or {}
         if selected.get('profile_id')!=chosen['profile_id'] or selected.get('stock_id')!=chosen['stock_id']:
             raise ValueError('Shared levels must use the same stock and response profile.')
         lo,hi=validate_levels(prior['transmission_low_rgb'],prior['transmission_high_rgb']);levels_basis=dict(type='shared',source=str(prior_path),sha256=sha(prior_path))
     else:
-        lo,hi=fit_levels(area);levels_basis=dict(type='per-frame',percentiles=[.2,99.8],note='May vary between frames; use --levels-from for a shared starting correction.')
+        lo,hi=fit_levels(measured);levels_basis=dict(type='per-frame',percentiles=[.2,99.8],note='May vary between frames; use --levels-from for a shared starting correction.')
     calibrated=None
     calibration_path=getattr(args,'calibration',None) or saved_roll.get('calibration_file')
     if calibration_path:
@@ -232,6 +334,20 @@ def convert(args,root=film_stocks.DATA):
         except (OSError,ValueError) as e:raise ValueError(f'--lut {lut_path}: not a NumPy array file ({e})')
         if given.shape!=(65536,3) or given.dtype!=np.uint16:raise ValueError(f'--lut {lut_path}: want a 65536 x 3 uint16 array, got {given.shape} {given.dtype}')
         lut=given;lut_source=dict(path=str(lut_path),sha256=sha(lut_path),note='Applied as given; the levels below were measured but not used.')
+    gains,exposure,turn_reason=None,1.0,'given' if rotate is not None else None;roll_check=None;tone=None
+    finishing=None
+    if auto:
+        small=small_copy[my0//look:-(-my1//look),mx0//look:-(-mx1//look)]
+        if film!='slide' and not calibrated and not lut_source:   # an approved curve or a calibration is already the grade
+            others=[g for n,g in roll_balance(roll_dir,chosen,model).items() if (roll_dir/'masters'/n).resolve()!=source] if roll_dir else None
+            m=film_auto.measure(small,lut,others);gains,exposure,roll_check,tone=m['gains'],m['exposure'],m['roll_check'],m['tone']
+        if rotate is None:
+            rotate,turn_reason=film_auto.orientation(render(small,lut,args.contrast,args.gamma,args.warmth,255,saturation,gains,exposure,tone))
+        finishing=dict(balance_rgb=None if gains is None else [round(float(g),5) for g in gains],exposure=round(float(exposure),5),tone=tone,
+                       roll_check=roll_check,
+                       crop_found=found,rotation_cw=rotate,rotation_reason=turn_reason,
+                       note='Automatic: per-frame balance (checked against the roll\'s), exposure and tone (black point, contrast, highlights rolled off), the picture box, which way up. --no-auto turns it off.')
+    rotate=int(rotate or 0);mirror=bool(getattr(args,'mirror',False))
     stride=1 if args.max_side==0 else max(1,math.ceil(max(area.shape[:2])/args.max_side));hh,ww=-(-area.shape[0]//stride),-(-area.shape[1]//stride)
     dest.parent.mkdir(parents=True,exist_ok=True)
     # The picture, its LUT and its recipe are each written under another name and given their own only once all are
@@ -247,18 +363,24 @@ def convert(args,root=film_stocks.DATA):
                     if args.warmth:raise ValueError('Use neutral scene anchors instead of warmth with density calibration.')
                     if saturation!=1:raise ValueError('Saturation is not available with density calibration yet.')
                     pixels[start:start+64]=film_density.render_density(strip,lut,args.contrast,args.gamma,calibrated['recover_clipped_blue'],top)
-                else:pixels[start:start+64]=render(strip,lut,args.contrast,args.gamma,args.warmth,top,saturation)
+                else:pixels[start:start+64]=render(strip,lut,args.contrast,args.gamma,args.warmth,top,saturation,gains,exposure,tone)
+            dust_step=None
+            if dust:   # on the finished picture, before it's turned: like clean's dust step (see clean.remove_dust)
+                from .. import clean as cleaning
+                _,dust_step=cleaning.remove_dust(pixels)
             pixels.flush();icc=srgb_icc()
-            if deep:write_tiff(made[dest],pixels,icc)
+            turned=np.rot90(pixels,-rotate//90) if rotate else pixels   # clockwise, after the whole frame is rendered
+            if mirror:turned=turned[:,::-1]   # then left to right, as the picture is seen
+            if deep:write_tiff(made[dest],np.ascontiguousarray(turned) if rotate or mirror else pixels,icc)
             else:
-                im=Image.fromarray(pixels)
+                im=Image.fromarray(np.ascontiguousarray(turned) if rotate or mirror else pixels)
                 try:im.save(made[dest],icc_profile=icc,**({'quality':95,'subsampling':0} if dest.suffix.lower()!='.png' else {}))
                 finally:del im
         finally:
-            del pixels
+            turned=None;del pixels
         scratch.unlink(missing_ok=True)
         np.save(made[lutfile],lut)
-        record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,saturation=saturation,lut_source=lut_source,output_dimensions=[ww,hh],source_dimensions=[w,h],downscale=dict(method='block average',block=stride) if stride>1 else None,channel_health=health,output=str(dest),output_sha256=sha(made[dest]),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(made[lutfile]),raw_tiffs_modified=False,approved=False)
+        record=dict(created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),status='Starting conversion — requires visual review',source=str(source),source_sha256=digest,source_capture_metadata_sha256=sha(str(source)+'.json') if Path(str(source)+'.json').exists() else None,film_selection=chosen,film=film,profile_sha256=film_stocks.profile_sha256(chosen['profile_id'],root),profile_source=model.get('source'),raw_crop_pixels=box,transmission_low_rgb=lo.tolist(),transmission_high_rgb=hi.tolist(),levels_basis=levels_basis,contrast=args.contrast,gamma=args.gamma,warmth=args.warmth,saturation=saturation,lut_source=lut_source,automatic=finishing,crop_choice=getattr(args,'crop_source',None) or ('given' if args.crop else 'automatic' if auto else 'whole'),dust=dust_step,rotation_cw=rotate,mirror=mirror,output_dimensions=[hh,ww] if rotate in (90,270) else [ww,hh],source_dimensions=[w,h],downscale=dict(method='block average',block=stride) if stride>1 else None,channel_health=health,output=str(dest),output_sha256=sha(made[dest]),output_bits_per_channel=16 if deep else 8,input_bits_per_channel=16,lut=str(lutfile),lut_sha256=sha(made[lutfile]),raw_tiffs_modified=False,approved=False)
         if calibrated:record['density_calibration']=calibrated
         if sha(source)!=digest:raise ValueError('Source checksum changed during conversion.')
         made[recipe].write_text(json.dumps(record,indent=2)+'\n')

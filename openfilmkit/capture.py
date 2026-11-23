@@ -42,6 +42,10 @@ MIN_FREE = 1024 ** 3
 MARGIN = 512 * 1024 ** 2
 STALL = 900      # seconds with no word from scanimage and no growth of the file before a scan counts as stuck
 LISTEN = 5       # seconds between looks at the file while scanimage says nothing
+STOPPED = 'stopped before it finished (Stop, Ctrl-C, or the program closed)'
+OPEN_RETRIES = 1  # times a scan whose scanner wouldn't open is tried again (it nearly always opens the second time)
+OPEN_WAIT = 3     # seconds before that
+OPEN_FAILED = re.compile(r'^scanimage: open of device .* failed: ', re.M)
 CANCEL = 30      # seconds scanimage gets to stop the scanner once told to
 
 
@@ -287,6 +291,11 @@ def _listen(stream, heard):
     heard.put(None)
 
 
+def open_failed(text):
+    """Whether scanimage said it couldn't open the scanner: then it stopped before anything moved."""
+    return bool(OPEN_FAILED.search(text))
+
+
 def _stop(process):
     """Stop scanimage the way it stops itself: one interrupt, on which it cancels the scan and
     lets the scanner park, and CANCEL seconds to do it in; only then harder. Ctrl-C again
@@ -331,38 +340,55 @@ def capture(runtime, out, device, plan, prof, scanner, film, options_text, estim
         # The log in UTF-8 whatever the system's own encoding: what scanimage says is decoded with
         # U+FFFD for bytes that aren't text, and that has no place in cp1252, say.
         with p['partial'].open('xb') as image, p['log'].open('x', buffering=1, encoding='utf-8') as log:
-            process = subprocess.Popen(cmd, env=scan_env(runtime, device), stdout=image, stderr=subprocess.PIPE,
-                                       start_new_session=os.name == 'posix')
-            threading.Thread(target=_listen, args=(process.stderr, heard), daemon=True).start()
-            shown, size, since, display = True, 0, time.monotonic(), _Display()
-            while True:
-                try:
-                    said = heard.get(timeout=LISTEN)
-                except queue.Empty:   # calibrating or warming up, it says nothing for a while; the file tells too
-                    grown = p['partial'].stat().st_size
-                    if grown != size:
-                        size, since = grown, time.monotonic()
-                    elif time.monotonic() - since > STALL:
-                        raise CaptureError(f'scanimage has said nothing and written nothing for {STALL // 60} minutes: '
-                                           f"the scanner or its connection is stuck; see {p['log']}")
-                    continue
-                if said is not None:
-                    since = time.monotonic()
-                    log.write(said)
-                text = display.feed(said or '', end=said is None)
-                if shown and text:
+            shown = True
+            for attempt in range(1 + OPEN_RETRIES):
+                process = subprocess.Popen(cmd, env=scan_env(runtime, device), stdout=image, stderr=subprocess.PIPE,
+                                           start_new_session=os.name == 'posix')
+                threading.Thread(target=_listen, args=(process.stderr, heard), daemon=True).start()
+                size, since, display, this_time = 0, time.monotonic(), _Display(), []
+                while True:
                     try:
-                        progress.write(text)
-                        progress.flush()
-                    except (OSError, ValueError):   # nobody is reading any more: the scan goes on, and the log has it all
-                        shown = False
-                if said is None:
+                        said = heard.get(timeout=LISTEN)
+                    except queue.Empty:   # calibrating or warming up, it says nothing for a while; the file tells too
+                        grown = p['partial'].stat().st_size
+                        if grown != size:
+                            size, since = grown, time.monotonic()
+                        elif time.monotonic() - since > STALL:
+                            raise CaptureError(f'scanimage has said nothing and written nothing for {STALL // 60} minutes: '
+                                               f"the scanner or its connection is stuck; see {p['log']}")
+                        continue
+                    if said is not None:
+                        since = time.monotonic()
+                        log.write(said)
+                        this_time.append(said)
+                    text = display.feed(said or '', end=said is None)
+                    if shown and text:
+                        try:
+                            progress.write(text)
+                            progress.flush()
+                        except (OSError, ValueError):   # nobody is reading any more: the scan goes on, and the log has it all
+                            shown = False
+                    if said is None:
+                        break
+                code = process.wait()
+                if not (code and open_failed(''.join(this_time)) and os.fstat(image.fileno()).st_size == 0 and attempt < OPEN_RETRIES):
                     break
-            code = process.wait()
+                # The scanner wasn't ready to open (seen on the first scan of a session): nothing moved and
+                # nothing was written, so wait and ask once more. The log keeps both tries.
+                note = f'The scanner wasn’t ready; trying again in {OPEN_WAIT} seconds.\n'
+                log.write(note)
+                if shown:
+                    try:
+                        progress.write(note); progress.flush()
+                    except (OSError, ValueError):
+                        shown = False
+                process.stderr.close()   # the first try's: it has said all it will
+                time.sleep(OPEN_WAIT)
+                heard = queue.Queue()
             image.flush()
             os.fsync(image.fileno())
         if code:
-            raise CaptureError(f"scanimage exited with status {code}; see {p['log']}")
+            raise CaptureError(f"scanimage exited with status {code}; see {p['log']}")   # the scanner's own words are in what it said
         info = inspect_tiff(p['partial'])
         check_tiff(info, plan, prof)
         health = channel_health(p['partial'])
@@ -396,8 +422,8 @@ def capture(runtime, out, device, plan, prof, scanner, film, options_text, estim
             except OSError:
                 pass
         else:
-            record.update(status='failed_or_interrupted', ended_utc=now(), error=str(exc) or
-                          type(exc).__name__, partial=str(p['partial']), **_logged_frontend(p['log']))
+            record.update(status='failed_or_interrupted', ended_utc=now(), error=str(exc) or (STOPPED if isinstance(exc, KeyboardInterrupt) else
+                          type(exc).__name__), partial=str(p['partial']), **_logged_frontend(p['log']))
         try:
             _write_record(p['record'], record)
         except OSError:   # the drive has gone too, say: the first trouble is the one to report

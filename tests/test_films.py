@@ -61,7 +61,7 @@ class Conversion(unittest.TestCase):
  def setUp(self):self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
  def tearDown(self):self.temp.cleanup()
  def args(self,**kw):
-  opts=dict(source=str(self.root/'raw.tif'),output=str(self.root/'view.jpg'),stock='kirkland-200',roll=None,profile='agfa-hdc200',crop=None,levels_from=None,max_side=1800,contrast=1.3,gamma=1.,warmth=0.);opts.update(kw);return argparse.Namespace(**opts)
+  opts=dict(source=str(self.root/'raw.tif'),output=str(self.root/'view.jpg'),stock='kirkland-200',roll=None,profile='agfa-hdc200',crop=None,levels_from=None,max_side=1800,contrast=1.3,gamma=1.,warmth=0.,auto=False);opts.update(kw);return argparse.Namespace(**opts)
  def raw(self,path=None):
   a=np.linspace(2000,50000,12*10*3).reshape(10,12,3).astype('uint16');tiff16(path or self.root/'raw.tif',a);return a
  def test_all_profiles_are_complete_monotone_and_traceable(self):
@@ -199,7 +199,7 @@ class Conversion(unittest.TestCase):
   Path(str(master)+'.json').write_text(json.dumps({'film':{'film':'color-negative','stock':'kirkland-200','roll':{}},'sha256':conversion.sha(master)}))
   for expected in ('frame-01-v1.jpg','frame-01-v2.jpg'):
    out=io.StringIO()
-   with contextlib.redirect_stdout(out):code=cli.main(['convert',str(master),'--json'])
+   with contextlib.redirect_stdout(out):code=cli.main(['convert',str(master),'--json','--no-auto'])
    self.assertEqual(code,0);rec=json.loads(out.getvalue())
    self.assertEqual(Path(rec['output']).resolve(),(r/'derived'/expected).resolve());self.assertEqual(rec['film_selection']['profile_id'],'agfa-hdc200');self.assertEqual(rec['film_selection']['selection_basis'],'saved roll choice')
 
@@ -240,7 +240,7 @@ class OtherScanSoftware(unittest.TestCase):
  def test_compressed_rgbi_scan_converts_like_the_plain_one(self):
   plain=self.write('plain.tif',self.rgb);rgbi=self.write('rgbi.tif',np.dstack([self.rgb,self.ir]),extrasamples=['unspecified'],compression='lzw')
   args=dict(stock=None,roll=None,profile='kodak-gold200',crop=None,levels_from=None,max_side=0,contrast=1.3,gamma=1.,warmth=0.)
-  for src in (plain,rgbi):conversion.convert(argparse.Namespace(source=str(src),output=str(src.with_suffix('.jpg')),**args))
+  for src in (plain,rgbi):conversion.convert(argparse.Namespace(source=str(src),output=str(src.with_suffix('.jpg')),auto=False,**args))
   self.assertEqual(plain.with_suffix('.jpg').read_bytes(),rgbi.with_suffix('.jpg').read_bytes())
  def test_scans_without_16_bit_rgb_are_refused(self):
   for name,data,photometric in (('8-bit.tif',(self.rgb>>8).astype('uint8'),'rgb'),('gray.tif',self.rgb[:,:,0],'minisblack'),('float.tif',self.rgb.astype('float32'),'rgb')):

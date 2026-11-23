@@ -117,6 +117,32 @@ class Rolls(unittest.TestCase):
             (path / 'masters' / 'frame-02.tif.partial').write_bytes(b'')  # failed attempt
             self.assertEqual(roll.next_frame(path).name, 'frame-03.tif')
 
+    def test_a_failed_scan_at_the_end_gives_its_number_to_the_next(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, 'roll-08')
+            roll.create(path)
+            m = path / 'masters'
+            (m / 'frame-01.tif').write_bytes(b'')
+            (m / 'frame-02.tif.json').write_text(json.dumps({'status': 'failed_or_interrupted'}))
+            (m / 'frame-02.tif.partial').write_bytes(b'')
+            (m / 'frame-02.tif.scan.log').write_text('stopped')
+            moved = roll.set_aside_failed(path)
+            self.assertEqual(roll.next_frame(path).name, 'frame-02.tif')
+            self.assertEqual(sorted(p.name.split('-', 2)[2].split('.', 1)[1] for p in moved),
+                             ['tif.json', 'tif.partial', 'tif.scan.log'])   # all kept, in masters/attempts
+            self.assertTrue(all(p.parent.name == 'attempts' for p in moved))
+
+    def test_a_scan_in_progress_or_a_gap_in_the_middle_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, 'roll-09')
+            roll.create(path)
+            m = path / 'masters'
+            (m / 'frame-01.tif.json').write_text(json.dumps({'status': 'failed_or_interrupted'}))
+            (m / 'frame-02.tif').write_bytes(b'')
+            (m / 'frame-03.tif.json').write_text(json.dumps({'status': 'starting'}))
+            self.assertEqual(roll.set_aside_failed(path), [])
+            self.assertEqual(roll.next_frame(path).name, 'frame-04.tif')
+
     def test_bad_film_type(self):
         with tempfile.TemporaryDirectory() as d, self.assertRaises(roll.RollError):
             roll.create(Path(d, 'r'), film='positive')
@@ -315,6 +341,10 @@ if mode == 'silent':
     sys.stderr.flush()
     mark('scanning')
     time.sleep(120)
+if mode == 'open-always' or (mode == 'open-once' and open(marks).read().count('pid=') == 1):
+    sys.stderr.write('[19:42:12.192427] [genesys] WARNING: Your scanner is not fully supported' + chr(10))
+    sys.stderr.write('scanimage: open of device genesys:libusb:000:002 failed: Invalid argument' + chr(10))
+    sys.exit(1)
 if mode == 'odd':
     sys.stderr.buffer.write(bytes([99, 97, 102, 233, 32, 255, 254, 10]))   # not UTF-8
 for n in range(50):
@@ -364,6 +394,33 @@ class StandIn(unittest.TestCase):
         except ProcessLookupError:
             return True
         return False
+
+    def test_a_scanner_that_wont_open_is_asked_once_more(self):
+        """Twice in the real Plustek logs the first scan of a session failed to open the scanner and the
+        next one worked: the kit waits and tries once more by itself, and the log keeps both tries."""
+        said = io.StringIO()
+        with self.checked(), mock.patch.object(capture, 'OPEN_WAIT', 0):
+            record = self.scan('open-once', progress=said)
+        self.assertEqual(record['status'], 'captured_verified')
+        self.assertEqual(self.marks.read_text().count('pid='), 2)
+        self.assertIn('wasn’t ready; trying again', said.getvalue())
+        self.assertNotIn('[genesys]', said.getvalue())
+        log = Path(str(self.out) + '.scan.log').read_text()
+        self.assertIn('open of device', log)
+        self.assertEqual(self.out.stat().st_size, 2000)   # the second try's image alone
+
+    def test_a_scanner_that_still_wont_open_fails_with_its_words(self):
+        said = io.StringIO()
+        with self.checked(), mock.patch.object(capture, 'OPEN_WAIT', 0):
+            with self.assertRaises(capture.CaptureError):
+                self.scan('open-always', progress=said)
+        self.assertEqual(self.marks.read_text().count('pid='), 2)   # once more, not forever
+        self.assertEqual(said.getvalue().count('open of device'), 2)
+        self.assertEqual(self.record()['status'], 'failed_or_interrupted')
+
+    def test_other_failures_are_not_tried_again(self):
+        self.assertFalse(capture.open_failed('scanimage: sane_read: Error during device I/O\n'))
+        self.assertTrue(capture.open_failed('Progress: 0%\nscanimage: open of device x failed: Device busy\n'))
 
     def test_ctrl_c_lets_scanimage_stop_the_scanner_itself(self):
         """Ctrl-C at a terminal goes to every program in the foreground. scanimage got it, began to

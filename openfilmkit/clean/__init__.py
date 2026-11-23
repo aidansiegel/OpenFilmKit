@@ -181,6 +181,25 @@ def default_output(source):
     return source.with_name(f'{source.stem}-clean-v{n}{source.suffix}')
 
 
+def find_dust(img, protect_faces=True):
+    """Where the dust is in a picture (a mask), with the date stamp and the faces that were kept out of it."""
+    small = restore.to8(img)
+    stamp = restore.stamp_mask(small)
+    faces = find_faces(small) if protect_faces else []
+    return restore.dust_mask(small, protect=stamp | restore.feature_mask(img.shape, faces)), stamp, faces
+
+
+def remove_dust(img, protect_faces=True):
+    """Dust and fibers taken out of a picture in memory, in place, as clean's dust step does: the date stamp, and
+    eyes and mouths of the faces found, are left alone. Returns (img, the step for a recipe). What convert --dust
+    and the desktop app use, so dust removal is one more adjustment of the picture rather than a second copy."""
+    mask, stamp, faces = find_dust(img, protect_faces)
+    img = restore.remove_dust(img, mask, out=img)
+    return img, {'step': 'dust', 'pixels_filled': int(mask.sum()), 'share': round(float(mask.mean()), 6),
+                 'faces_protected': len(faces), 'face_detector': FACE_DETECTOR if protect_faces else None,
+                 'stamp_pixels_protected': int(stamp.sum()), 'method': 'OpenCV inpaint (Telea)'}
+
+
 def clean(source, output=None, crop=True, dust=True, protect_faces=True, color=False,
           straighten=None, lift_shadows=None, red_eye=False, scratches=False, spare_long_lines=False,
           spots=None, say=None, checkpoints=None):

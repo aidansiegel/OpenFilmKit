@@ -612,6 +612,8 @@ def cmd_scan(args, out):
     frame = 0
     try:
         while frame < args.frames:
+            if roll_dir:
+                roll.set_aside_failed(roll_dir)   # a scan stopped or failed at the end: this one takes its number
             dest = roll.next_frame(roll_dir) if roll_dir else target
             if frame and interactive:
                 if _ask('Position the next frame, then press Enter (q to stop): ') == 'q':
@@ -648,7 +650,9 @@ def cmd_scan(args, out):
     finally:
         for s, handler in before.items():
             signal.signal(s, handler)
-    if frame == 1 and records and records[0]['status'] == 'captured_verified':
+    first = records and records[0]['status'] == 'captured_verified' and (
+        roll_dir is None or Path(records[0]['output']).name.lower() == 'frame-01.tif')
+    if frame == 1 and first:   # the roll's first frame only, not every frame the app scans one at a time
         out.say('Check framing, focus and exposure before scanning the rest of the roll.')
     out.result({'scanner': scanner, 'plan': plan, 'warnings': warnings, 'captures': records})
     return 0 if records and all(r['status'] == 'captured_verified' for r in records) else 1
@@ -714,6 +718,16 @@ def parser():
     s.add_argument('--warmth', type=float, default=0.0, help='small balance adjustment, -1 to +1')
     s.add_argument('--saturation', type=float, default=1.0,
                    help='color strength, 0 (gray) to 3; 1 leaves it as scanned (default)')
+    s.add_argument('--rotate', type=int, choices=(0, 90, 180, 270),
+                   help='turn the picture clockwise by this many degrees (default: found automatically)')
+    s.add_argument('--mirror', action='store_true',
+                   help='flip the picture left to right after turning it (a strip scanned with the wrong side up)')
+    s.add_argument('--auto', action=argparse.BooleanOptionalAction, default=True,
+                   help='per-frame color balance and exposure, crop to the picture and turn it upright '
+                        '(default); --no-auto converts exactly as before')
+    s.add_argument('--dust', action='store_true',
+                   help="remove dust and fibers from the picture as it's made (faces and the date stamp are "
+                        'left alone); the same as clean\'s dust step, without a second copy')
     s.add_argument('--lut', metavar='FILE',
                    help='apply an approved curve (a 65536 x 3 uint16 .npy, raw code to output) instead of '
                         'fitting one; with --contrast 1 it is applied as is')
