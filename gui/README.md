@@ -32,13 +32,15 @@ unpacker can fail silently after the download; unpacking the cached zip from
 - `src/main.js`: the window, the menu, and the Python back end process.
 - `src/preload.js`: the only bridge the page has (no Node in the page).
 - `src/index.html`, `app.css`, `app.js`: the page, plain DOM with no framework.
-- `fonts/Inter-Variable.ttf`: Inter (SIL Open Font License), served locally.
+- `fonts/`: Inter 4.001 (rsms/inter) for all text and Damion for one script word on one canister, both
+  under the SIL Open Font License, served locally. Each font's license is beside it
+  (`Inter-OFL.txt`, `Damion-OFL.txt`) and has to ship with it.
 - `../openfilmkit/gui_service.py`: the back end. Tests: `../tests/test_gui_service.py`.
+- `test/`: `npm test` (Node 21 or later) checks that every method the page calls is one the back end has.
 
 ## Not done yet
 
 - Packaging (a `.app` that carries its own Python and SANE, signed and notarized for macOS).
-- Automatic turn, crop and color balance; dust cleaning from the app.
 - The scan screen hasn't been run against a real scanner.
 - An axe-core run and a VoiceOver pass.
-- Inter's license text (OFL) beside the font, before anything is shipped.
+- Eject on Windows: the export sheet says to use “Safely Remove Hardware” instead.
