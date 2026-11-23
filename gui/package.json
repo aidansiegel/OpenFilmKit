@@ -1,0 +1,19 @@
+{
+  "name": "openfilmkit-desktop",
+  "productName": "OpenFilmKit",
+  "version": "0.1.0",
+  "description": "Desktop app for OpenFilmKit: scan film and turn negatives into pictures without a terminal.",
+  "main": "src/main.js",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "electron": "39.2.3"
+  },
+  "allowScripts": {
+    "electron@39.2.3": true
+  }
+}

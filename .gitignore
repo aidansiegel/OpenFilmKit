@@ -7,3 +7,4 @@ tools/research/sources/
 build/
 *.egg-info/
 dist/
+gui/node_modules/

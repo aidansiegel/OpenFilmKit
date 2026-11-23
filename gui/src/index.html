@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenFilmKit</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <a class="skip" href="#photo-area">Skip to the pictures</a>
+  <header class="bar">
+    <h1 class="brand">OpenFilmKit</h1>
+    <div class="tabs" role="tablist" aria-label="View">
+      <button class="tab" role="tab" id="tab-scan" type="button" aria-selected="false">Scan</button>
+      <button class="tab" role="tab" id="tab-roll" type="button" aria-selected="true">Roll</button>
+      <button class="tab" role="tab" id="tab-queue" type="button" aria-selected="false">Queue</button>
+    </div>
+    <p class="where" id="where"></p>
+    <button class="btn" id="open-btn" type="button">Open…</button>
+    <button class="btn btn-primary" id="export-btn" type="button" hidden>Export</button>
+  </header>
+
+  <div class="layout" id="layout">
+    <main class="photo-area" id="photo-area" tabindex="-1" aria-label="Pictures">
+      <div id="photo-body"></div>
+    </main>
+
+    <aside class="inspector" aria-label="Adjust">
+      <div id="inspector-body"></div>
+    </aside>
+  </div>
+
+  <footer class="status-bar" id="status-bar"></footer>
+
+  <dialog class="dialog" id="confirm-dialog" aria-labelledby="confirm-title">
+    <form method="dialog">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-text"></p>
+      <div class="footer">
+        <button class="btn btn-text" value="cancel" type="submit">Cancel</button>
+        <button class="btn btn-primary" value="ok" type="submit" id="confirm-ok"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog info" id="info-dialog" aria-labelledby="info-title">
+    <form method="dialog">
+      <div class="info-head"><h2 id="info-title"></h2><button class="btn btn-text icon-only" value="close" type="submit" aria-label="Close" id="info-x"></button></div>
+      <div id="info-body"></div>
+      <div class="footer"><button class="btn" value="close" type="submit">Close</button></div>
+    </form>
+  </dialog>
+
+  <div class="visually-hidden" role="status" aria-live="polite" id="status"></div>
+  <script src="icons.js"></script>
+  <script src="canisters.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

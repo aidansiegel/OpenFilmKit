@@ -4,8 +4,10 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 
 ## Principles
 
-- Command line first: every step is a subcommand with `--json`; a terminal UI comes later, on the
-  same core. No GUI.
+- Command line first: every step is a subcommand with `--json`, and the terminal UI and the desktop app
+  sit on the same core. The desktop app is for the people who want this most and won't open a
+  terminal (library patrons, family members); it calls the same functions, so anything saved from it
+  has the same recipe and can be redone from the command line.
 - `scanimage` talks to SANE, one process per operation, so a driver crash can't take the kit down
   and every scan records a command anyone can rerun.
 - Masters are never touched. Every later step writes a new file plus a recipe that reproduces it.
@@ -28,6 +30,7 @@ OpenFilmKit is built in milestones. Status as of November 2026.
 | M7 | Terminal UI (Textual) | In progress: `openfilmkit ui` browses rolls with previews (before/after, fixes marked), recipes, cleaning (here, on a host, into a queue) and the queue. Next: a scan screen, after the first real scanner runs. |
 | M8 | First release | 0.1.0, an early release ahead of M4 and M7, so the kit can be installed and tried. |
 | M9 | Remote processing: run conversion and cleanup on another machine, or queue jobs for several | Done for `clean` in 0.6.0: `clean --on HOST` and a queue several workers take jobs from (`clean --queue`, `openfilmkit worker`), on job packages with stage checkpoints, so stopped work resumes to the same result on any machine. Next: `convert` jobs. |
+| M11 | Desktop app (Electron, `gui/`) | In progress: open a roll, frames with thumbnails, a live preview with brightness, contrast, warmth, color and turn, hold to see the automatic version, save a picture or a 16-bit TIFF, and a scan screen. Next: automatic turn, crop and color balance (the November 21 bake-off found these are what make the automatic result disappointing), dust cleaning by default, then packaging that carries its own Python and SANE so it runs from a removable disk. The scan screen hasn't been run against a scanner yet. |
 | M10 | Flatbeds with film adapters | Planned; a flatbed can be attached for testing. A holder holds several frames, so `scan --holder NAME` will preview the whole holder, find the frames (holder windows, then the gaps between frames, fitted to the format's spacing), let you review the boxes, and scan each frame as its own master; nothing after `scan` changes. `roll add` will also bring in frames the scanner's own software has already separated, with a record of where they came from. |
 
 ## Known limits
