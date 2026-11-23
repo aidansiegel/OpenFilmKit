@@ -45,7 +45,7 @@ class Queue(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.queue = self.root / 'queue'
         (self.root / 'config').mkdir()
-        (self.root / 'config' / 'hosts.toml').write_text(f'[queues.home]\nqueue = "{self.queue}"\n')
+        (self.root / 'config' / 'hosts.toml').write_text(f'[queues.home]\nqueue = {json.dumps(str(self.queue))}\n')
         self.env = mock.patch.dict(os.environ, {'OPENFILMKIT_CONFIG': str(self.root / 'config'),
                                                 'OPENFILMKIT_CACHE': str(self.root / 'cache')})
         self.env.start()
@@ -185,10 +185,10 @@ class Queue(unittest.TestCase):
         for line, key in (('memory_gb = "lots"', 'memory_gb'), ('memory_gb = 0', 'memory_gb'), ('poll = "often"', 'poll'),
                           ('lease = -5', 'lease'), ('busy_when = 5', 'busy_when'), ('yield_to = [1, 2]', 'yield_to'),
                           ('name = 7', 'name'), ('ssh_command = ["ssh"]', 'ssh_command')):
-            hosts.write_text(f'[worker]\nqueue = "{self.queue}"\n{line}\n')
+            hosts.write_text(f'[worker]\nqueue = {json.dumps(str(self.queue))}\n{line}\n')
             with self.assertRaisesRegex(queues.QueueError, key):
                 queues.worker_settings()
-        hosts.write_text(f'[worker]\nqueue = "{self.queue}"\nmemory_gb = "1.5"\nbusy_when = "true"\nlater = "ignored"\n')
+        hosts.write_text(f'[worker]\nqueue = {json.dumps(str(self.queue))}\nmemory_gb = "1.5"\nbusy_when = "true"\nlater = "ignored"\n')
         s = queues.worker_settings()
         self.assertEqual((s['memory_gb'], s['busy_when']), (1.5, ['true']))
 

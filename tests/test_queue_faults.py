@@ -63,7 +63,7 @@ class World:
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory())).resolve()
         self.queue = self.root / 'queue'
         (self.root / 'config').mkdir()
-        (self.root / 'config' / 'hosts.toml').write_text(f'[queues.home]\nqueue = "{self.queue}"\n')
+        (self.root / 'config' / 'hosts.toml').write_text(f'[queues.home]\nqueue = {json.dumps(str(self.queue))}\n')
         self.now = time.time()
         self.calls, self.fault, self.dead, self.doing = [], None, False, None
         self.story, self.escaped, self.runs, self.workers = [], [], 0, {}

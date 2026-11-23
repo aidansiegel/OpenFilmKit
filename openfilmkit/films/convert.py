@@ -53,7 +53,7 @@ def shrink(a,f):
     """Every f x f block of raw RGB16 averaged into one pixel (blocks in the last row and column may be smaller).
     The raw scan is linear, so this averages the light itself: a smaller copy keeps every pixel's share instead of
     one pixel in f*f, which left full-size grain, aliased it, and let specks smaller than a block disappear."""
-    if f==1:return a
+    if f==1:return np.array(a)   # a copy in memory, never `a` itself: a memory-mapped scan kept by the caller would hold its file open, which Windows won't then rename or delete
     h,w=a.shape[:2];rows,cols=np.arange(0,h,f),np.arange(0,w,f)
     total=np.add.reduceat(np.add.reduceat(np.asarray(a,np.uint32),rows,axis=0),cols,axis=1)
     n=np.minimum(f,h-rows)[:,None]*np.minimum(f,w-cols)[None,:]
@@ -367,7 +367,7 @@ def convert(args,root=film_stocks.DATA):
             dust_step=None
             if dust:   # on the finished picture, before it's turned: like clean's dust step (see clean.remove_dust)
                 from .. import clean as cleaning
-                _,dust_step=cleaning.remove_dust(pixels)
+                dust_step=cleaning.remove_dust(pixels)[1]   # it hands back `pixels` too: kept, it held the scratch file mapped past `del pixels`, and Windows wouldn't delete it
             pixels.flush();icc=srgb_icc()
             turned=np.rot90(pixels,-rotate//90) if rotate else pixels   # clockwise, after the whole frame is rendered
             if mirror:turned=turned[:,::-1]   # then left to right, as the picture is seen

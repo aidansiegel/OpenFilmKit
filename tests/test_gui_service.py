@@ -3,7 +3,9 @@ import argparse
 import base64
 import io
 import json
+import mmap
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -318,6 +320,29 @@ class Service(unittest.TestCase):
 
 
 @unittest.skipIf(np is None, 'needs numpy, tifffile and Pillow')
+def mapped(a):
+    """True if `a` is, or is a view of, a memory-mapped file."""
+    while a is not None:
+        if isinstance(a, mmap.mmap):
+            return True
+        a = getattr(a, 'base', None)
+    return False
+
+
+@unittest.skipIf(np is None, 'needs numpy, tifffile and Pillow')
+class OpenFiles(unittest.TestCase):
+    """Nothing the service keeps holds a scan's file mapped. Windows won't delete or replace a file that's
+    mapped, so a kept map blocked scanning a frame again, and every test's cleanup, there."""
+
+    def test_a_small_scan_kept_for_previews_is_a_copy(self):
+        with tempfile.TemporaryDirectory() as d:
+            master = roll_with_frame(Path(d)) / 'masters' / 'frame-01.tif'
+            self.assertTrue(mapped(conversion.raw_open(master)))   # stored plainly, so mapped: the case at hand
+            frame = gui_service.Frame(master, side=4000)            # bigger than the scan: shrunk by 1
+            self.assertEqual(frame.stride, 1)
+            self.assertFalse(any(mapped(v) for v in vars(frame).values() if isinstance(v, np.ndarray)))
+
+
 class PlainHealth(unittest.TestCase):
     def test_only_what_a_person_would_see_in_plain_words(self):
         from openfilmkit.gui_service import plain_health
@@ -486,7 +511,7 @@ class QueueTab(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.queue = self.root / 'queue'
         (self.root / 'config').mkdir()
-        (self.root / 'config' / 'hosts.toml').write_text(f'[queues.home]\nqueue = "{self.queue}"\n')
+        (self.root / 'config' / 'hosts.toml').write_text(f'[queues.home]\nqueue = {json.dumps(str(self.queue))}\n')
         self.patches = [mock.patch.dict(os.environ, {'OPENFILMKIT_CONFIG': str(self.root / 'config'),
                                                      'OPENFILMKIT_CACHE': str(self.root / 'cache')}),
                         mock.patch.object(queues, 'SPARE', 0)]
@@ -505,6 +530,7 @@ class QueueTab(unittest.TestCase):
             m.stop()
         self.temp.cleanup()
 
+    @unittest.skipIf(not shutil.which('rsync'), 'needs rsync, as every queue does')
     def test_a_shared_queue_is_shown_collected_and_tidied(self):
         import contextlib, time
         from openfilmkit import cli, queues
@@ -532,6 +558,7 @@ class QueueTab(unittest.TestCase):
         self.assertEqual(service.queue_remove(jobs=[left[0]['short']])['removed'], [left[0]['id']])
         self.assertEqual(service.queue_status()['jobs'], [])
 
+    @unittest.skipIf(not shutil.which('rsync'), 'needs rsync, as every queue does')
     def test_status_over_the_pipe_is_answered(self):
         (self.queue / 'jobs').mkdir(parents=True)
         (self.queue / 'drop').mkdir()
