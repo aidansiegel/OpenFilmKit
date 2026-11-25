@@ -43,3 +43,52 @@ jobs:
           python -m pip install coverage
           python -m coverage run --source=openfilmkit -m unittest discover -s tests -v
           python -m coverage report --show-missing --skip-covered --sort=miss
+  # Fedora, Debian and Arch, each in a container on GitHub's Ubuntu runner (the only Linux it hosts),
+  # with its own Python, compiler and libraries. The kit's patched SANE is built from source on each,
+  # as a Linux user's install does, which also runs the genesys driver's unit tests; the capture tests
+  # then run against that build's fake test scanner. A venv, since Debian and Arch refuse pip installs
+  # into the system Python. The container shares the runner's kernel and has no USB, so real scanners
+  # and the udev rule are beyond it.
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora
+            image: fedora:latest
+            setup: >-
+              dnf install -y git gcc gcc-c++ make autoconf autoconf-archive automake libtool gettext-devel
+              pkgconf-pkg-config libusb1-devel libtiff-devel libtiff-tools libjpeg-turbo-devel libpng-devel
+              python3 diffutils findutils
+          - distro: debian
+            image: debian:stable
+            setup: >-
+              apt-get update && apt-get install -y --no-install-recommends git ca-certificates build-essential
+              autoconf autoconf-archive automake libtool gettext autopoint pkg-config libusb-1.0-0-dev
+              libtiff-dev libtiff-tools libjpeg-dev libpng-dev python3 python3-venv
+          - distro: arch
+            image: archlinux:latest
+            setup: >-
+              pacman -Syu --noconfirm --needed base-devel git autoconf-archive gettext libusb libtiff
+              libjpeg-turbo libpng python
+    name: test (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - run: ${{ matrix.setup }}
+      - uses: actions/checkout@v5
+      - run: python3 --version && python3 -m venv /opt/venv && /opt/venv/bin/python -m pip install ".[clean,ui]"
+      - name: build the kit's SANE
+        run: |
+          short=$(/opt/venv/bin/python -c "import json; print(json.load(open('packaging/sane-pin.json'))['commit'][:8])")
+          /opt/venv/bin/python tools/build_sane.py --work /tmp/sane-work --prefix "$HOME/.local/share/openfilmkit/runtime/$short"
+      # Status 2 is "no scanner found", which is all a container can say; anything else fails.
+      - run: /opt/venv/bin/python -m openfilmkit doctor || [ $? -eq 2 ]
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/openfilmkit/models
+          key: openfilmkit-models-${{ matrix.distro }}-${{ hashFiles('openfilmkit/models.py') }}
+      - run: /opt/venv/bin/python -m openfilmkit models --fetch
+      - run: /opt/venv/bin/python -m unittest discover -s tests -v
