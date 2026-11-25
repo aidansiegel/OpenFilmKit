@@ -343,6 +343,33 @@ class OpenFiles(unittest.TestCase):
             self.assertFalse(any(mapped(v) for v in vars(frame).values() if isinstance(v, np.ndarray)))
 
 
+@unittest.skipIf(np is None, 'needs numpy, tifffile and Pillow')
+class SaveMatchesPreview(unittest.TestCase):
+    """A save with the automatic crop is the picture the preview showed: the same box and the same levels.
+    Dogfooding 66 real negatives found convert finding both again on a copy of another size (the preview's is
+    1400 px, convert's 1800), so saves came out up to 2% narrower and up to 24 levels off the preview."""
+
+    def test_the_automatic_box_and_levels_are_the_previews(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = Path(d) / 'Roll A'
+            roll.create(r, film='color-negative')
+            master = r / 'masters' / 'frame-01.tif'
+            negative(master, h=1100, w=3000)            # big enough that preview and convert shrink it differently
+            service = gui_service.Service(lambda ev: None)
+            service.preview(str(master))
+            frame = service._frame(str(master), None)
+            self.assertGreater(frame.stride, 1)
+            out = service.save(str(master))['output']
+            recipe = json.loads(Path(out + '.json').read_text())
+            self.assertEqual(recipe['crop_choice'], 'automatic')
+            self.assertEqual(recipe['raw_crop_pixels'], frame.auto_crop_px())
+            self.assertEqual(recipe['levels_basis']['type'], 'as previewed')
+            np.testing.assert_allclose(recipe['transmission_low_rgb'], frame.levels[0])
+            np.testing.assert_allclose(recipe['transmission_high_rgb'], frame.levels[1])
+            del frame
+            service.frames.clear()
+
+
 class PlainHealth(unittest.TestCase):
     def test_only_what_a_person_would_see_in_plain_words(self):
         from openfilmkit.gui_service import plain_health

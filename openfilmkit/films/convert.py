@@ -309,6 +309,8 @@ def convert(args,root=film_stocks.DATA):
         if selected.get('profile_id')!=chosen['profile_id'] or selected.get('stock_id')!=chosen['stock_id']:
             raise ValueError('Shared levels must use the same stock and response profile.')
         lo,hi=validate_levels(prior['transmission_low_rgb'],prior['transmission_high_rgb']);levels_basis=dict(type='shared',source=str(prior_path),sha256=sha(prior_path))
+    elif getattr(args,'levels',None):   # the desktop app's preview measured them: the saved picture is the one it showed
+        lo,hi=validate_levels(*args.levels);levels_basis=dict(type='as previewed',note='Measured on the app\'s preview of this picture, so the saved picture matches what was shown.')
     else:
         lo,hi=fit_levels(measured);levels_basis=dict(type='per-frame',percentiles=[.2,99.8],note='May vary between frames; use --levels-from for a shared starting correction.')
     calibrated=None

@@ -76,6 +76,7 @@ class Frame:
         self.small = np.ascontiguousarray(whole[y0:y1, x0:x1])
         self.whole = whole
         lo, hi = (np.full(3, .02), np.full(3, 1.)) if self.empty else conv.fit_levels(self.small)
+        self.levels = (lo.tolist(), hi.tolist())   # handed to a save, so it isn't measured again on the full scan
         self.lut = conv.slide_lut(profile, lo, hi) if self.film == 'slide' else conv.make_lut(profile, lo, hi)
         self.health = conv.scan_health.check(self.small)
         # an empty slot is all at full scale: say that, not "red is at full scale in 99% of the scan"
@@ -137,6 +138,12 @@ class Frame:
         frac = lambda b: scan_to_view((b[0] / W, b[1] / H, b[2] / W, b[3] / H), turn, bool((settings or {}).get('mirror')))
         crop = (settings or {}).get('crop')
         return frac(self.box), (None if crop == 'none' else frac(self.crop_box(settings)))
+
+    def auto_crop_px(self):
+        """The automatic crop (what the preview shows) in the scan's own pixels, [x0, y0, x1, y1]."""
+        x0, y0, x1, y1 = self.box
+        W, H = self.size
+        return [x0 * self.stride, y0 * self.stride, min(x1 * self.stride, W), min(y1 * self.stride, H)]
 
     def raw_crop(self, settings):
         """The crop in the scan's own pixels, for convert --crop; None for the automatic crop."""
@@ -510,11 +517,11 @@ class Service:
         return {**DEFAULTS, **{k: v for k, v in (settings or {}).items() if v is not None}}
 
     @staticmethod
-    def _args(master, s, stock, output, tiff, turn, crop_px=None):
+    def _args(master, s, stock, output, tiff, turn, crop_px=None, levels=None):
         """convert's options for a picture saved from the app (full size, as the preview showed it)."""
         return argparse.Namespace(source=str(master), output=str(output), stock=stock, roll=None, profile=None,
                                   crop=crop_px, crop_source=crop_source(s), calibration=None, scene=None, recover_clipped_blue=None,
-                                  levels_from=None, max_side=0, contrast=float(s['contrast']),
+                                  levels_from=None, levels=levels, max_side=0, contrast=float(s['contrast']),
                                   gamma=float(s['gamma']), warmth=float(s['warmth']),
                                   saturation=float(s['saturation']), lut=None, tiff=tiff,
                                   rotate=turn, auto=s.get('auto', True) is not False, dust=bool(s.get('dust')),
@@ -534,7 +541,10 @@ class Service:
             turn = None
         crop = s.get('crop') if on else None
         if crop is None:
-            return turn, None
+            # The automatic crop: for a save, the box the preview showed. Left to convert, it was found again on a
+            # copy of another size and came out a little different (dogfooding: up to 2% narrower, and color
+            # measured on a different area), so the saved picture wasn't the one on screen.
+            return turn, (self._frame(master, stock).auto_crop_px() if pin_turn and on else None)
         try:
             h, w = conv.raw_open(master).shape[:2]
         except (OSError, ValueError) as e:
@@ -552,7 +562,10 @@ class Service:
                 raise Problem('Choose where to save it: this scan is not in a roll folder.')
             output = roll.next_derived(roll_dir, master.stem, '.tif' if tiff else '.jpg')
         try:
-            record = conv.convert(self._args(master, s, stock, output, tiff, turn, crop_px))
+            # the preview's levels: measured again on the full-size scan, where grain moves the extremes, the
+            # saved picture came out up to 12 levels off the one on screen (dogfooding, real negatives)
+            record = conv.convert(self._args(master, s, stock, output, tiff, turn, crop_px,
+                                             levels=self._frame(master, stock).levels))
         except ValueError as e:
             raise Problem(str(e)) from e
         return dict(output=record['output'], warnings=record['channel_health']['warnings'])
