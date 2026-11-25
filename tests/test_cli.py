@@ -29,6 +29,76 @@ class ClosedPipe(unittest.TestCase):
 
 
 
+class StopWithParent(unittest.TestCase):
+    """A scan the desktop app started stops when the app's back end goes (the end of its stdin), the way Stop
+    stops it, instead of running on unseen. Dogfooding found scans finishing frames after the back end was
+    killed, and Quit kills it."""
+    CHILD = '''
+import signal, sys, time
+from openfilmkit import cli
+def stop(signum, frame):
+    raise KeyboardInterrupt
+signal.signal(signal.SIGTERM, stop)
+cli.stop_when_parent_goes()
+print('waiting', flush=True)
+try:
+    for _ in range(600):
+        time.sleep(.1)        # like a scan waiting on scanimage
+    print('ran on', flush=True)
+except KeyboardInterrupt:
+    print('stopped', flush=True)
+'''
+
+    def child(self, stop_with_parent):
+        env = {**os.environ, 'PYTHONPATH': str(ROOT)}
+        if stop_with_parent:
+            env['OPENFILMKIT_STOP_WITH_PARENT'] = '1'
+        return subprocess.Popen([sys.executable, '-c', self.CHILD], cwd=ROOT, env=env, text=True,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_the_end_of_stdin_stops_it_like_stop(self):
+        p = self.child(True)
+        self.assertEqual(p.stdout.readline().strip(), 'waiting')
+        p.stdin.close()                      # the back end has gone
+        out, err = p.communicate(timeout=30)
+        self.assertEqual(out.strip(), 'stopped', err)
+
+    def test_a_scan_that_ends_while_the_app_is_still_there_exits_cleanly(self):
+        # The watcher is still waiting on stdin when the scan finishes. Reading through sys.stdin, it held the
+        # buffer's lock at shutdown and Python aborted (-6), so every scan from the app read as failed. That
+        # abort showed in a real scan (the fake Plustek, through gui_service) but not in this small process;
+        # this checks the clean exit, and the overnight dogfood soak covers the real path.
+        env = {**os.environ, 'PYTHONPATH': str(ROOT), 'OPENFILMKIT_STOP_WITH_PARENT': '1'}
+        p = subprocess.Popen([sys.executable, '-c', 'from openfilmkit import cli\ncli.stop_when_parent_goes()\nprint("done")'],
+                             cwd=ROOT, env=env, text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE)
+        try:
+            p.wait(timeout=30)                     # stdin stays open: the app is still there when it ends
+            out, err = p.stdout.read(), p.stderr.read()
+        finally:
+            p.kill()
+            p.stdin.close()
+            p.stdout.close()
+            p.stderr.close()
+        self.assertEqual((p.returncode, out.strip()), (0, 'done'), err)
+        self.assertNotIn('Fatal Python error', err)
+
+    def test_without_the_apps_word_stdin_closing_changes_nothing(self):
+        env = {k: v for k, v in os.environ.items() if k != 'OPENFILMKIT_STOP_WITH_PARENT'}
+        p = subprocess.Popen([sys.executable, '-c', self.CHILD.replace('cli.stop_when_parent_goes()',
+                              "import os\nif os.environ.get(cli.STOP_WITH_PARENT) == '1': cli.stop_when_parent_goes()")],
+                             cwd=ROOT, env={**env, 'PYTHONPATH': str(ROOT)}, text=True,
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            self.assertEqual(p.stdout.readline().strip(), 'waiting')
+            p.stdin.close()                  # a terminal's stdin closing is not the app going
+            with self.assertRaises(subprocess.TimeoutExpired):
+                p.wait(timeout=2)
+        finally:
+            p.kill()
+            p.communicate()
+
+
 class Options(unittest.TestCase):
     def test_color_has_a_hidden_british_alias(self):
         sys.path.insert(0, str(ROOT))

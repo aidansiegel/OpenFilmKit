@@ -553,6 +553,33 @@ OWNED = ('--mode', '--depth', '--resolution', '--source', '--format', '--device-
          '--formatted-device-list', '-f', '--test', '-T', '--help', '-h', '--version', '-V')
 
 
+STOP_WITH_PARENT = 'OPENFILMKIT_STOP_WITH_PARENT'
+
+
+def stop_when_parent_goes():
+    """For a scan the desktop app started: its back end holds this process's stdin open and never writes to it,
+    so the end of stdin means the app has gone (quit, crashed or killed). The scan is then stopped as Stop would
+    stop it, instead of running on unseen and leaving the scanner busy for the next one. Only when the app asks
+    (OPENFILMKIT_STOP_WITH_PARENT=1): from a terminal, stdin is the person's keyboard."""
+    import signal
+    import threading
+
+    def watch():
+        # os.read on the descriptor, not sys.stdin: a daemon thread still blocked in sys.stdin's buffered read holds
+        # its lock when Python shuts down, and Python then aborts (exit -6) after a scan that worked.
+        try:
+            while os.read(0, 65536):
+                pass
+        except OSError:
+            pass
+        if os.name == 'nt':   # Windows has no SIGTERM to send oneself that a handler can catch
+            import _thread
+            _thread.interrupt_main()
+        else:
+            os.kill(os.getpid(), signal.SIGTERM)   # a real signal: it wakes a main thread waiting on scanimage
+    threading.Thread(target=watch, daemon=True, name='stop-when-parent-goes').start()
+
+
 def _ask(prompt):
     """An answer typed at the terminal; "q" when there is none to be had (Ctrl-D, a closed terminal)."""
     try:
@@ -608,6 +635,8 @@ def cmd_scan(args, out):
     def stop(signum, frame):   # `kill`, or the terminal closed: like Ctrl-C, so the scanner is stopped and the record says so
         raise KeyboardInterrupt
     before = {s: signal.signal(s, stop) for s in (getattr(signal, n, None) for n in ('SIGTERM', 'SIGHUP')) if s}
+    if os.environ.get(STOP_WITH_PARENT) == '1':
+        stop_when_parent_goes()
     records = []
     frame = 0
     try:

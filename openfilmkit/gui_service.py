@@ -755,8 +755,11 @@ class Service:
         cmd = self._kit('scan', str(target), '--json') + (['--dpi', str(int(dpi))] if dpi else []) + (
             ['--note', note] if note else [])
         self.scan_stopping = False
+        # The scan holds the read end of a pipe that only this process writes to (and never does): if the back end
+        # goes, however it goes (the app quit, a crash, a kill), the scan sees the pipe close and stops, rather
+        # than running on unseen with the scanner busy. See cli.stop_when_parent_goes.
         self.scan_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                          stdin=subprocess.DEVNULL)
+                                          stdin=subprocess.PIPE, env={**os.environ, 'OPENFILMKIT_STOP_WITH_PARENT': '1'})
         proc, started = self.scan_proc, time.monotonic()
 
         def follow():
@@ -777,6 +780,7 @@ class Service:
                 self.write(dict(event='scan', line=line))
             out = proc.stdout.read()
             proc.wait()
+            proc.stdin.close()   # the scan's "the app is still here" pipe, no longer needed
             try:
                 result = json.loads(out) if out.strip() else None
             except ValueError:
