@@ -210,7 +210,7 @@ function renderSheet() {
         'aria-label': `${nice(f.name)}, ${exporting ? 'exporting now' : STATUS_WORD[st].toLowerCase()}`,
         onclick: () => select(f), ondblclick: () => openLarge(f), onkeydown: sheetKeys,
       }, h('span', { class: 'pic' }, img, h('span', { class: 'badge', 'aria-hidden': 'true' }, icon('check'))),
-      h('span', { class: 'meta' }, h('b', {}, nice(f.name)),
+      h('span', { class: 'meta' }, h('b', {}, nice(f.name)), ' ',   // the space: so the words seen read as the spoken label does
         exporting ? h('span', { class: 'saving' }, 'exporting…') : h('span', { class: 'st' }, st === 'new' ? '' : st === 'changed' ? 'changed' : 'exported')))));
     }
     body.append(h('section', { class: 'place' }, several || place.label ? h('h3', {}, place.label) : null, list));
@@ -770,7 +770,7 @@ function renderFilm() {
   const sel = filmPicker(frame, pick);
   const choose = () => openModal('Choose the film', h('p', { class: 'hint' }, 'The name is printed along the film edge. Unknown works fine.'), sel);
   box.replaceChildren(...[
-    h('button', { class: 'film film-btn', type: 'button', title: 'Choose a different film', 'aria-label': `Film: ${name}. Choose a different film`, onclick: choose }, can,
+    h('button', { class: 'film film-btn', type: 'button', title: 'Choose a different film', onclick: choose }, can,   // named by what it shows, so Voice Control's "Change" finds it
       h('span', { class: 'film-text' }, h('span', { class: 'n' }, name),
         h('span', { class: 't' }, fc && fc.iso ? `${kind} · ISO ${fc.iso}` : `${kind} · worked out from the scan`)),
       h('span', { class: 'change' }, 'Change')),
@@ -1255,7 +1255,7 @@ function renderScanStage() {
         h('button', { class: 'btn btn-small', type: 'button', onclick: () => { setView('sheet'); const f = allFrames().find((x) => x.master === key); if (f) openLarge(f); } }, 'Adjust it')));
   }
   const strip = frames.length ? h('div', { class: 'scan-strip' }, h('h3', {}, `${roll.label} · ${plural(frames.length, 'frame', 'frames')}`),
-    h('ul', { role: 'list' }, frames.map((f) => {
+    h('ul', { role: 'list', tabindex: '0', 'aria-label': `Frames scanned into ${roll.label}` }, frames.map((f) => {   // it scrolls sideways: reachable by keyboard
       // Empty alt until the picture arrives: Chromium draws no broken-image icon for alt="", so the shimmer placeholder shows.
       const img = h('img', { alt: '', width: 96, height: 64, onload: (e) => { e.target.alt = nice(f.name); } });
       const c = state.thumbs.get(f.master); if (c) img.src = c; else queueThumb(f, img);
