@@ -151,11 +151,35 @@ def copy_out(picture, folder, name):
         files.place(tmp, dest)
     except FileExistsError:   # something took the name meanwhile: try the next one
         tmp.unlink(missing_ok=True)
+        drop_apple_double(tmp)
         return copy_out(picture, folder, name)
     except BaseException:
         tmp.unlink(missing_ok=True)
+        drop_apple_double(tmp)
         raise
+    drop_apple_double(dest)
     return dest
+
+
+APPLE_DOUBLE = b'\x00\x05\x16\x07'
+
+
+def drop_apple_double(path):
+    """Take away the hidden "._name" file macOS writes beside `path` on a drive formatted for Windows (exFAT, FAT),
+    where it keeps the file's extended attributes. A TV, a photo frame or a Windows PC shows each one as a broken
+    copy of the picture (dogfooding: every exported picture had one). It only holds the com.apple.provenance
+    stamp macOS puts on every new file, which can't be removed from the file itself. Only a file that starts as
+    an AppleDouble file does is taken: a picture someone named "._something" is left alone."""
+    if sys.platform != 'darwin':
+        return
+    twin = Path(path).with_name('._' + Path(path).name)
+    try:
+        with open(twin, 'rb') as f:
+            if f.read(4) != APPLE_DOUBLE:
+                return
+        twin.unlink()
+    except OSError:
+        pass
 
 
 def eject(path):

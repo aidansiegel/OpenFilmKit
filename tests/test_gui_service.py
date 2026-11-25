@@ -382,6 +382,24 @@ class PlainHealth(unittest.TestCase):
 
 
 class Destinations(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'darwin', "macOS's hidden ._ files")
+    def test_macos_hidden_twin_files_dont_go_to_the_stick(self):
+        # On an exFAT stick macOS writes "._name" beside each copy; a TV or a Windows PC shows those as broken
+        # pictures. This disk is APFS, where none is made, so one is put there as macOS would make it.
+        from openfilmkit import destinations
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / 'pic.jpg').write_bytes(b'picture')
+            twin = d / '._pic.jpg'
+            twin.write_bytes(destinations.APPLE_DOUBLE + b'\x00\x02\x00\x00' + bytes(40))
+            someones = d / '._notes.jpg'
+            someones.write_bytes(b'\xff\xd8 a picture someone named this')
+            (d / 'notes.jpg').write_bytes(b'x')
+            destinations.drop_apple_double(d / 'pic.jpg')
+            destinations.drop_apple_double(d / 'notes.jpg')
+            self.assertFalse(twin.exists())
+            self.assertTrue(someones.exists())
+
     def test_plain_names(self):
         from openfilmkit.destinations import plain_name
         self.assertEqual(plain_name('Roll 2026-11-23', '/r/masters/frame-03.tif', '.jpg'), 'Roll 2026-11-23 03.jpg')
